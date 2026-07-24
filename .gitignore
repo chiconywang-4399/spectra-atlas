@@ -1,0 +1,10 @@
+# Never publish plaintext or raw laboratory data
+source/app/spectral-data.json
+spectral-data.json
+*.raw
+
+# Local credentials and build caches
+.env*
+node_modules/
+dist/
+github-pages-dist/
