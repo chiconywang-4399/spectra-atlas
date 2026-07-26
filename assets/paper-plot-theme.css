@@ -1,0 +1,259 @@
+.dashboard-shell {
+  --page-bg: #f6f5ef;
+  --page-text: #101719;
+  --page-muted: #5f6a6d;
+  --page-line: #10171929;
+  --panel-solid: #fff;
+  --inverse-bg: #101719;
+  --inverse-bg-2: #172023;
+  --chart-bg: #fff;
+  --chart-plot: #fff;
+  --chart-grid: #19191921;
+  --chart-axis: #151515;
+  min-height: 100vh;
+  background: var(--page-bg);
+  color: var(--page-text);
+}
+
+.dashboard-shell[data-theme="dark"] {
+  --page-bg: #0f1415;
+  --page-text: #e8ece8;
+  --page-muted: #9aa6a4;
+  --page-line: #ecf0eb24;
+  --panel-solid: #171f20;
+  --inverse-bg: #050808;
+  --inverse-bg-2: #0d1415;
+  --chart-bg: #f9f9f4;
+  --chart-plot: #fff;
+  --chart-grid: #19191929;
+  --chart-axis: #101010;
+}
+
+.dashboard-shell .site-header {
+  background: color-mix(in srgb, var(--inverse-bg) 92%, transparent);
+}
+
+.dashboard-shell .hero,
+.dashboard-shell .overview,
+.dashboard-shell .insights {
+  background: var(--page-bg);
+  color: var(--page-text);
+}
+
+.dashboard-shell .hero-lead,
+.dashboard-shell .section-heading > p,
+.dashboard-shell .technique-card p,
+.dashboard-shell .technique-meta,
+.dashboard-shell .panel-foot,
+.dashboard-shell .chart-title-row span,
+.dashboard-shell .chart-note,
+.dashboard-shell .series-legend button {
+  color: var(--page-muted);
+}
+
+.dashboard-shell .technique-grid,
+.dashboard-shell .technique-card,
+.dashboard-shell .technique-meta,
+.dashboard-shell .peak-strip,
+.dashboard-shell .peak-strip div,
+.dashboard-shell .chemistry-table,
+.dashboard-shell .fit-quality-list,
+.dashboard-shell .chart-title-row .chart-badge,
+.dashboard-shell .series-legend button,
+.dashboard-shell .chart-note {
+  border-color: var(--page-line);
+}
+
+.dashboard-shell .technique-card:hover,
+.dashboard-shell .insight-card.wide,
+.dashboard-shell .chemistry-table,
+.dashboard-shell[data-theme="light"] .insight-card {
+  background: var(--panel-solid);
+}
+
+.dashboard-shell[data-theme="dark"] .technique-card:hover,
+.dashboard-shell[data-theme="dark"] .insight-card,
+.dashboard-shell[data-theme="dark"] .insight-card.wide,
+.dashboard-shell[data-theme="dark"] .chemistry-table {
+  background: var(--panel-solid);
+}
+
+.dashboard-shell[data-theme="dark"] .explorer-section,
+.dashboard-shell[data-theme="dark"] .archive-section {
+  background: var(--inverse-bg);
+}
+
+.dashboard-shell[data-theme="light"] .explorer-section,
+.dashboard-shell[data-theme="light"] .archive-section {
+  background: #edeae0;
+  color: var(--page-text);
+}
+
+.dashboard-shell[data-theme="light"] .section-heading.light h2,
+.dashboard-shell[data-theme="light"] .chart-title-row h3 {
+  color: var(--page-text);
+}
+
+.dashboard-shell[data-theme="light"] .section-heading.light > p,
+.dashboard-shell[data-theme="light"] .chart-title-row span {
+  color: var(--page-muted);
+}
+
+.dashboard-shell .workbench {
+  border-color: var(--page-line);
+  background: var(--panel-solid);
+  box-shadow: 0 24px 55px #1017191f;
+}
+
+.dashboard-shell[data-theme="dark"] .workbench {
+  border-color: #ffffff1f;
+  background: var(--inverse-bg-2);
+  box-shadow: 0 32px 80px #00000059;
+}
+
+.dashboard-shell .workbench-top {
+  border-bottom-color: var(--page-line);
+}
+
+.dashboard-shell[data-theme="dark"] .workbench-top {
+  border-bottom-color: #ffffff1a;
+}
+
+.dashboard-shell .technique-tabs button {
+  border-right-color: var(--page-line);
+  color: #687174;
+}
+
+.dashboard-shell .technique-tabs button.active {
+  background: #009e7314;
+  color: var(--page-text);
+  box-shadow: inset 0 -2px #009e73;
+}
+
+.dashboard-shell[data-theme="dark"] .technique-tabs button {
+  border-right-color: #ffffff14;
+  color: #879493;
+}
+
+.dashboard-shell[data-theme="dark"] .technique-tabs button.active {
+  background: #ffffff0a;
+  color: #f0f4f2;
+}
+
+.dashboard-shell .select-control select,
+.dashboard-shell .region-tabs button {
+  border-color: var(--page-line);
+  background: var(--panel-solid);
+  color: var(--page-text);
+}
+
+.dashboard-shell[data-theme="dark"] .select-control select,
+.dashboard-shell[data-theme="dark"] .region-tabs button {
+  border-color: #ffffff1f;
+  background: #111a1b;
+  color: #d6dedb;
+}
+
+.dashboard-shell .chart-frame,
+.dashboard-shell .chart-surface {
+  background: var(--chart-bg);
+}
+
+.dashboard-shell .plot-surface {
+  fill: var(--chart-plot);
+  stroke: var(--chart-axis);
+  stroke-width: 1.1;
+}
+
+.dashboard-shell .grid-line {
+  stroke: var(--chart-grid);
+}
+
+.dashboard-shell .tick-mark {
+  stroke: var(--chart-axis);
+}
+
+.dashboard-shell .axis-tick,
+.dashboard-shell .axis-label {
+  fill: var(--chart-axis);
+  font-family: Arial, "Helvetica Neue", "Microsoft YaHei", sans-serif;
+  font-size: 12px;
+}
+
+.dashboard-shell .axis-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dashboard-shell .hover-line {
+  stroke: #111;
+}
+
+.dashboard-shell .series-legend button.visible {
+  background: #00000009;
+  color: var(--page-text);
+}
+
+.theme-palette {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px;
+  border: 1px solid #ffffff1f;
+  background: #ffffff0a;
+}
+
+.palette-swatches {
+  display: inline-flex;
+  align-items: center;
+}
+
+.palette-swatches i {
+  display: block;
+  width: 13px;
+  height: 13px;
+  margin-left: -3px;
+  border: 1px solid #ffffff52;
+}
+
+.palette-swatches i:first-child {
+  margin-left: 0;
+}
+
+.theme-switch {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.theme-switch button {
+  min-width: 45px;
+  height: 25px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: #9aa6a4;
+  cursor: pointer;
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.theme-switch button.active {
+  background: #f4f3ee;
+  color: #101719;
+}
+
+@media (width <= 760px) {
+  .theme-palette {
+    gap: 6px;
+    padding: 4px;
+  }
+
+  .palette-swatches {
+    display: none;
+  }
+
+  .theme-switch button {
+    min-width: 38px;
+  }
+}
