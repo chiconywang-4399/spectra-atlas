@@ -30,9 +30,9 @@ function argumentValue(name) {
 const password =
   argumentValue("--password") ?? process.env.SPECTRA_GITHUB_PAGES_PASSWORD;
 
-if (!password || password.length < 14) {
+if (!password || password.length < 10) {
   console.error(
-    "GitHub Pages 访问密码至少需要 14 个字符；请使用 --password 或 SPECTRA_GITHUB_PAGES_PASSWORD。",
+    "GitHub Pages 访问密码至少需要 10 个字符；请使用 --password 或 SPECTRA_GITHUB_PAGES_PASSWORD。",
   );
   process.exit(1);
 }
@@ -91,5 +91,30 @@ await copyFile(
   resolve(OUTPUT_ROOT, "index.html"),
   resolve(OUTPUT_ROOT, "404.html"),
 );
+
+const paperThemeCss = resolve(PROJECT_ROOT, "..", "assets", "paper-plot-theme.css");
+const paperThemeJs = resolve(PROJECT_ROOT, "..", "assets", "paper-plot-theme.js");
+
+await copyFile(
+  paperThemeCss,
+  resolve(OUTPUT_ROOT, "assets", "paper-plot-theme.css"),
+);
+await copyFile(
+  paperThemeJs,
+  resolve(OUTPUT_ROOT, "assets", "paper-plot-theme.js"),
+);
+
+async function injectPaperThemeAssets(htmlPath) {
+  const html = await readFile(htmlPath, "utf8");
+  if (html.includes("paper-plot-theme.css")) return;
+  const patched = html.replace(
+    /(\s*<link rel="stylesheet" crossorigin href="\.\/assets\/[^"]+">)/,
+    `$1\n    <link rel="stylesheet" href="./assets/paper-plot-theme.css">\n    <script type="module" src="./assets/paper-plot-theme.js"></script>`,
+  );
+  await writeFile(htmlPath, patched, "utf8");
+}
+
+await injectPaperThemeAssets(resolve(OUTPUT_ROOT, "index.html"));
+await injectPaperThemeAssets(resolve(OUTPUT_ROOT, "404.html"));
 
 console.log(`GitHub Pages build ready: ${OUTPUT_ROOT}`);

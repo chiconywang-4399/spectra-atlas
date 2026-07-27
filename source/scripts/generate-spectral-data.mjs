@@ -281,12 +281,16 @@ for (const [id, filename, label, color] of [
   ["tr2", "260717 TR-2.txt", "260717 TR-2", "#ffb86b"],
 ]) {
   const raw = await readTwoColumn(path.join(ftirFolder, filename), { delimiter: /\t+/ });
+  const wavelengthPoints = raw
+    .map(([wavenumber, transmittance]) => [10000 / wavenumber, transmittance * 100])
+    .filter(([wavelength, transmittance]) => Number.isFinite(wavelength) && Number.isFinite(transmittance))
+    .sort((left, right) => left[0] - right[0]);
   ftirSeries.push({
     id,
     label,
     color,
     pointCount: raw.length,
-    points: downsample(raw.map(([x, y]) => [x, y * 100])),
+    points: downsample(wavelengthPoints),
     sourcePath: `FT-IR/20260722-xiaowai-zhangshanting-wangkangkang.rar/${filename}`,
   });
 }
@@ -390,7 +394,7 @@ const payload = {
     note: "相对透射比 = 镀膜样品强度 / 未镀膜 CNT 平均强度；Mo9/CNT 为跨日比较，不等同于绝对仪器透过率。",
   },
   ftir: {
-    axis: { x: "Wavenumber (cm⁻¹)", y: "Transmittance (%)" },
+    axis: { x: "Wavelength (µm)", y: "Transmittance (%)" },
     series: ftirSeries,
   },
   xps: {

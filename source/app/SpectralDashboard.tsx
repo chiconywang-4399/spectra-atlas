@@ -101,7 +101,7 @@ const techniqueInfo: Record<
   ftir: {
     eyebrow: "VIBRATIONAL",
     name: "FTIR",
-    caption: "4000–600 cm⁻¹ 透射光谱",
+    caption: "2.5–16.7 µm 中红外透射光谱",
     accent: "#ffb86b",
     code: "IR",
   },
@@ -127,8 +127,8 @@ const rangeOptions: Record<Technique, { id: string; label: string; range?: [numb
   ],
   ftir: [
     { id: "full", label: "完整光谱" },
-    { id: "functional", label: "官能团区", range: [1500, 4000] },
-    { id: "fingerprint", label: "指纹区", range: [600, 1500] },
+    { id: "functional", label: "官能团区 · 2.5–6.7 µm", range: [2.5, 6.7] },
+    { id: "fingerprint", label: "指纹区 · 6.7–16.7 µm", range: [6.7, 16.7] },
   ],
   xps: [{ id: "full", label: "当前谱区" }],
 };
@@ -166,6 +166,7 @@ function SpectrumChart({
   range,
   reverseX,
   normalize,
+  yDomain,
 }: {
   series: SpectrumSeries[];
   xLabel: string;
@@ -174,6 +175,7 @@ function SpectrumChart({
   range?: [number, number];
   reverseX?: boolean;
   normalize?: boolean;
+  yDomain?: [number, number];
 }) {
   const [hover, setHover] = useState<{
     viewX: number;
@@ -208,6 +210,14 @@ function SpectrumChart({
     }
     const xValues = allPoints.map((point) => point[0]);
     const yValues = allPoints.map((point) => point[1]);
+    if (yDomain) {
+      return {
+        xMin: Math.min(...xValues),
+        xMax: Math.max(...xValues),
+        yMin: Math.min(...yDomain),
+        yMax: Math.max(...yDomain),
+      };
+    }
     let yMin = Math.min(...yValues);
     let yMax = Math.max(...yValues);
     const yPadding = Math.max((yMax - yMin) * 0.08, Math.abs(yMax) * 0.015, 0.01);
@@ -219,7 +229,7 @@ function SpectrumChart({
       yMin,
       yMax,
     };
-  }, [prepared]);
+  }, [prepared, yDomain]);
 
   const width = 1000;
   const height = 440;
@@ -243,6 +253,14 @@ function SpectrumChart({
     { length: 5 },
     (_, index) => chart.yMin + (index / 4) * (chart.yMax - chart.yMin),
   );
+  const formatXTick = (value: number) => {
+    if (xLabel.includes("µm")) return value < 10 ? value.toFixed(2) : value.toFixed(1);
+    return compact(value);
+  };
+  const formatYTick = (value: number) => {
+    if (yDomain || yLabel.includes("%") || normalize) return value.toFixed(0);
+    return compact(value);
+  };
 
   const makePath = (points: Point[]) =>
     points
@@ -306,7 +324,7 @@ function SpectrumChart({
                 className="grid-line"
               />
               <text x={margin.left - 14} y={yScale(tick) + 4} textAnchor="end" className="axis-tick">
-                {compact(tick)}
+                {formatYTick(tick)}
               </text>
             </g>
           ))}
@@ -325,7 +343,7 @@ function SpectrumChart({
                 textAnchor="middle"
                 className="axis-tick"
               >
-                {compact(tick)}
+                {formatXTick(tick)}
               </text>
             </g>
           ))}
@@ -374,7 +392,7 @@ function SpectrumChart({
           className={`chart-tooltip ${hover.left > (frameRef.current?.clientWidth ?? 0) * 0.66 ? "tooltip-left" : ""}`}
           style={{ left: hover.left, top: Math.max(hover.top, 66) }}
         >
-          <div className="tooltip-x">{xLabel}: {fixed(hover.dataX, 1)}</div>
+          <div className="tooltip-x">{xLabel}: {xLabel.includes("µm") ? fixed(hover.dataX, 2) : fixed(hover.dataX, 1)}</div>
           {hover.entries.slice(0, 7).map((entry) => (
             <div className="tooltip-row" key={entry.label}>
               <span className="tooltip-dot" style={{ background: entry.color }} />
@@ -679,8 +697,9 @@ export default function SpectralDashboard({
               yLabel={activeAxis.y}
               visible={visibleSeries}
               range={activeRange}
-              reverseX={technique === "xps" || technique === "ftir"}
+              reverseX={technique === "xps"}
               normalize={technique === "raman" && normalizeRaman}
+              yDomain={technique === "ftir" ? [0, 100] : undefined}
             />
 
             <div className="series-legend" aria-label="曲线图例">
@@ -703,7 +722,9 @@ export default function SpectralDashboard({
                 ? data.uvvis.note
                 : technique === "xps"
                   ? `能量校准：${data.xps.chargeReference.line} → ${data.xps.chargeReference.target_binding_energy_eV.toFixed(1)} eV；应用位移 ${data.xps.chargeReference.applied_shift_eV.toFixed(3)} eV。`
-                  : "曲线由目录内原始文件解析并抽样显示；抽样保留峰形，定量分析仍以源文件为准。"}
+                  : technique === "ftir"
+                    ? "FTIR 原始数据为波数 cm⁻¹；页面按 λ(µm)=10000/波数 转换为波长坐标，并以 0–100% 透过率范围显示。"
+                    : "曲线由目录内原始文件解析并抽样显示；抽样保留峰形，定量分析仍以源文件为准。"}
             </div>
           </div>
         </div>
