@@ -174,6 +174,24 @@ test("XPS export includes deconvolution, background-corrected, residual, and fit
   assert.match(source, /xps_charge_reference/);
 });
 
+test("Avantage XPS Excel import is local-only and keeps fitted peak data exportable", async () => {
+  const source = await readFile(new URL("../app/SpectralDashboard.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /parseAdvantageXpsExcel/);
+  assert.match(source, /parseXlsxWorkbook/);
+  assert.match(source, /DecompressionStream/);
+  assert.match(source, /Avantage XPS Excel/);
+  assert.match(source, /accept="\.xlsx,\.xlsm,\.xls,\.xml,\.html,\.htm"/);
+  assert.match(source, /Fitted\\s\+Peak/);
+  assert.match(source, /fitted\\s\+envelope/);
+  assert.match(source, /backgnd\|background\|shirley/);
+  assert.match(source, /advantage_peak_table/);
+  assert.match(source, /No GitHub token is required for local plotting/);
+  assert.match(source, /Nothing is written to GitHub and no token is used/);
+  assert.match(source, /buildXpsExportSeries\(advantageSeries\)/);
+  assert.match(source, /exportSections=\{advantagePreview\.exportSections\}/);
+});
+
 test("local secure entry requires a password and serves the authorized dashboard", async (t) => {
   const server = createLocalSecureServer({
     password: "test-password-123",

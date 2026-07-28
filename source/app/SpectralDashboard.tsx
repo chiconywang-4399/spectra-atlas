@@ -118,6 +118,22 @@ type UploadPreview = {
   sha256: string;
 };
 
+type WorkbookSheet = {
+  name: string;
+  rows: (string | number)[][];
+};
+
+type AdvantageXpsPreview = {
+  fileName: string;
+  regions: {
+    id: string;
+    label: string;
+    sourcePath: string;
+    series: SpectrumSeries[];
+  }[];
+  exportSections: ExportSection[];
+};
+
 const GITHUB_OWNER = "chiconywang-4399";
 const GITHUB_REPO = "spectra-atlas";
 const GITHUB_BRANCH = "main";
@@ -540,6 +556,342 @@ const parseSpectrumText = (
   };
 };
 
+const cleanCell = (value: string | number | undefined) =>
+  String(value ?? "")
+    .replace(/^\uFEFF/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const toFiniteNumber = (value: string | number | undefined) => {
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  const text = cleanCell(value).replace(/,/g, "");
+  if (!text) return undefined;
+  const number = Number(text);
+  return Number.isFinite(number) ? number : undefined;
+};
+
+const columnIndexFromRef = (cellRef: string) => {
+  const letters = (cellRef.match(/^[A-Z]+/i)?.[0] ?? "").toUpperCase();
+  let index = 0;
+  for (const letter of letters) index = index * 26 + letter.charCodeAt(0) - 64;
+  return Math.max(index - 1, 0);
+};
+
+const inflateRaw = async (bytes: Uint8Array) => {
+  const Decompression = (globalThis as typeof globalThis & {
+    DecompressionStream?: new (format: string) => TransformStream<Uint8Array, Uint8Array>;
+  }).DecompressionStream;
+  if (!Decompression) {
+    throw new Error("This browser cannot decompress XLSX files. Use a recent Chrome/Edge browser.");
+  }
+  const blobPart = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(blobPart).set(bytes);
+  const stream = new Blob([blobPart]).stream().pipeThrough(new Decompression("deflate-raw"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+};
+
+const readZipEntries = async (buffer: ArrayBuffer) => {
+  const bytes = new Uint8Array(buffer);
+  const view = new DataView(buffer);
+  let eocdOffset = -1;
+  for (let index = bytes.length - 22; index >= Math.max(0, bytes.length - 66000); index -= 1) {
+    if (view.getUint32(index, true) === 0x06054b50) {
+      eocdOffset = index;
+      break;
+    }
+  }
+  if (eocdOffset < 0) throw new Error("Could not read the XLSX zip directory.");
+
+  const entryCount = view.getUint16(eocdOffset + 10, true);
+  let directoryOffset = view.getUint32(eocdOffset + 16, true);
+  const decoder = new TextDecoder("utf-8");
+  const entries = new Map<string, Uint8Array>();
+
+  for (let entryIndex = 0; entryIndex < entryCount; entryIndex += 1) {
+    if (view.getUint32(directoryOffset, true) !== 0x02014b50) break;
+    const method = view.getUint16(directoryOffset + 10, true);
+    const compressedSize = view.getUint32(directoryOffset + 20, true);
+    const nameLength = view.getUint16(directoryOffset + 28, true);
+    const extraLength = view.getUint16(directoryOffset + 30, true);
+    const commentLength = view.getUint16(directoryOffset + 32, true);
+    const localOffset = view.getUint32(directoryOffset + 42, true);
+    const name = decoder.decode(bytes.slice(directoryOffset + 46, directoryOffset + 46 + nameLength));
+
+    const localNameLength = view.getUint16(localOffset + 26, true);
+    const localExtraLength = view.getUint16(localOffset + 28, true);
+    const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+    const compressed = bytes.slice(dataStart, dataStart + compressedSize);
+    if (method === 0) entries.set(name, compressed);
+    else if (method === 8) entries.set(name, await inflateRaw(compressed));
+
+    directoryOffset += 46 + nameLength + extraLength + commentLength;
+  }
+
+  return entries;
+};
+
+const parseXml = (xml: string) => new DOMParser().parseFromString(xml, "application/xml");
+
+const xmlText = (node: Element | null | undefined) => node?.textContent ?? "";
+
+const parseSharedStrings = (xml: string | undefined) => {
+  if (!xml) return [];
+  const doc = parseXml(xml);
+  return Array.from(doc.getElementsByTagName("si")).map((item) =>
+    Array.from(item.getElementsByTagName("t"))
+      .map((node) => node.textContent ?? "")
+      .join(""),
+  );
+};
+
+const parseWorksheetRows = (xml: string, sharedStrings: string[]) => {
+  const doc = parseXml(xml);
+  const rows: (string | number)[][] = [];
+  for (const row of Array.from(doc.getElementsByTagName("row"))) {
+    const values: (string | number)[] = [];
+    for (const cell of Array.from(row.getElementsByTagName("c"))) {
+      const columnIndex = columnIndexFromRef(cell.getAttribute("r") ?? "");
+      const type = cell.getAttribute("t");
+      const raw = xmlText(cell.getElementsByTagName("v")[0]);
+      let value: string | number = "";
+      if (type === "s") value = sharedStrings[Number(raw)] ?? "";
+      else if (type === "inlineStr") value = Array.from(cell.getElementsByTagName("t")).map((node) => node.textContent ?? "").join("");
+      else if (type === "str") value = raw;
+      else if (raw !== "") {
+        const numeric = Number(raw);
+        value = Number.isFinite(numeric) ? numeric : raw;
+      }
+      values[columnIndex] = value;
+    }
+    while (values.length && cleanCell(values[values.length - 1]) === "") values.pop();
+    rows.push(values);
+  }
+  return rows;
+};
+
+const normalizeXlsxPath = (target: string) => {
+  const normalized = target.replace(/\\/g, "/").replace(/^\//, "");
+  return normalized.startsWith("xl/") ? normalized : `xl/${normalized}`;
+};
+
+const parseXlsxWorkbook = async (buffer: ArrayBuffer): Promise<WorkbookSheet[]> => {
+  const entries = await readZipEntries(buffer);
+  const decoder = new TextDecoder("utf-8");
+  const textEntry = (path: string) => {
+    const bytes = entries.get(path);
+    return bytes ? decoder.decode(bytes) : undefined;
+  };
+  const sharedStrings = parseSharedStrings(textEntry("xl/sharedStrings.xml"));
+  const workbookXml = textEntry("xl/workbook.xml");
+  const relsXml = textEntry("xl/_rels/workbook.xml.rels");
+  if (!workbookXml) throw new Error("XLSX workbook.xml is missing.");
+
+  const rels = new Map<string, string>();
+  if (relsXml) {
+    const relsDoc = parseXml(relsXml);
+    for (const rel of Array.from(relsDoc.getElementsByTagName("Relationship"))) {
+      const id = rel.getAttribute("Id");
+      const target = rel.getAttribute("Target");
+      if (id && target) rels.set(id, normalizeXlsxPath(target));
+    }
+  }
+
+  const workbookDoc = parseXml(workbookXml);
+  const sheets: WorkbookSheet[] = [];
+  for (const sheet of Array.from(workbookDoc.getElementsByTagName("sheet"))) {
+    const name = sheet.getAttribute("name") ?? `Sheet ${sheets.length + 1}`;
+    const relId = sheet.getAttribute("r:id") ?? sheet.getAttribute("id") ?? "";
+    const path = rels.get(relId);
+    const xml = path ? textEntry(path) : undefined;
+    if (xml) sheets.push({ name, rows: parseWorksheetRows(xml, sharedStrings) });
+  }
+
+  if (sheets.length === 0) {
+    for (const [path, bytes] of entries) {
+      if (/^xl\/worksheets\/sheet\d+\.xml$/i.test(path)) {
+        sheets.push({ name: path.split("/").pop()?.replace(/\.xml$/i, "") ?? path, rows: parseWorksheetRows(decoder.decode(bytes), sharedStrings) });
+      }
+    }
+  }
+
+  return sheets;
+};
+
+const parseXmlOrHtmlWorkbook = (buffer: ArrayBuffer, fileName: string): WorkbookSheet[] => {
+  const text = new TextDecoder("utf-8").decode(buffer);
+  if (!/<(html|table|Workbook|Worksheet)\b/i.test(text)) {
+    throw new Error(`Binary .xls files cannot be parsed locally. In Avantage, export or save the report as .xlsx/.xlsm and try again: ${fileName}`);
+  }
+  const doc = new DOMParser().parseFromString(text, text.includes("<html") ? "text/html" : "application/xml");
+  const xmlWorksheets = Array.from(doc.getElementsByTagName("Worksheet"));
+  if (xmlWorksheets.length) {
+    return xmlWorksheets.map((worksheet, index) => ({
+      name: worksheet.getAttribute("ss:Name") ?? worksheet.getAttribute("Name") ?? `Sheet ${index + 1}`,
+      rows: Array.from(worksheet.getElementsByTagName("Row")).map((row) =>
+        Array.from(row.getElementsByTagName("Cell")).map((cell) => {
+          const text = cleanCell(cell.textContent ?? "");
+          const numeric = toFiniteNumber(text);
+          return numeric ?? text;
+        }),
+      ),
+    }));
+  }
+  return Array.from(doc.getElementsByTagName("table")).map((table, index) => ({
+    name: `Table ${index + 1}`,
+    rows: Array.from(table.getElementsByTagName("tr")).map((row) =>
+      Array.from(row.querySelectorAll("th,td")).map((cell) => {
+        const text = cleanCell(cell.textContent ?? "");
+        const numeric = toFiniteNumber(text);
+        return numeric ?? text;
+      }),
+    ),
+  }));
+};
+
+const parseExcelWorkbook = async (file: File): Promise<WorkbookSheet[]> => {
+  const buffer = await file.arrayBuffer();
+  const signature = new Uint8Array(buffer.slice(0, 4));
+  if (signature[0] === 0x50 && signature[1] === 0x4b) return parseXlsxWorkbook(buffer);
+  return parseXmlOrHtmlWorkbook(buffer, file.name);
+};
+
+const cleanAdvantageLabel = (label: string) =>
+  cleanCell(label)
+    .replace(/^Fitted\s+Peak\s+/i, "")
+    .replace(/\s+Scan\s+/i, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const classifyAdvantageColumn = (header: string, unit: string, measuredUsed: boolean) => {
+  const text = `${header} ${unit}`.toLowerCase();
+  if (/fitted\s+envelope|envelope|total\s+fit|sum\s+fit/.test(text)) return "fit";
+  if (/backgnd|background|shirley/.test(text)) return "background";
+  if (/fitted\s+peak|component|peak\s+/.test(text)) return "component";
+  if (!measuredUsed && /counts|cps|intensity/.test(text)) return "measured";
+  return header ? "component" : "";
+};
+
+const xpsComponentColor = (index: number) =>
+  ["#0072B2", "#009E73", "#E69F00", "#CC79A7", "#56B4E9", "#D55E00", "#999999"][index % 7];
+
+const buildAdvantageRegion = (sheet: WorkbookSheet, fileName: string) => {
+  const headerIndex = sheet.rows.findIndex((row) =>
+    row.some((cell) => /binding\s+energy|kinetic\s+energy/i.test(cleanCell(cell))),
+  );
+  if (headerIndex < 0) return null;
+  const headers = sheet.rows[headerIndex] ?? [];
+  const units = sheet.rows[headerIndex + 1] ?? [];
+  const xColumn = headers.findIndex((cell) => /binding\s+energy|kinetic\s+energy/i.test(cleanCell(cell)));
+  if (xColumn < 0) return null;
+
+  const rows = sheet.rows.slice(headerIndex + 2);
+  let measuredUsed = false;
+  let componentIndex = 0;
+  const series: SpectrumSeries[] = [];
+  const maxColumns = Math.max(...sheet.rows.map((row) => row.length), 0);
+
+  for (let column = 0; column < maxColumns; column += 1) {
+    if (column === xColumn) continue;
+    const header = cleanCell(headers[column]);
+    const unit = cleanCell(units[column]);
+    const role = classifyAdvantageColumn(header, unit, measuredUsed);
+    if (!role) continue;
+
+    const points = rows
+      .map((row) => {
+        const x = toFiniteNumber(row[xColumn]);
+        const y = toFiniteNumber(row[column]);
+        return x !== undefined && y !== undefined ? ([x, y] as Point) : undefined;
+      })
+      .filter((point): point is Point => Boolean(point));
+    if (points.length < 3) continue;
+
+    const id =
+      role === "measured"
+        ? "measured"
+        : role === "fit"
+          ? "fit"
+          : role === "background"
+            ? "background"
+            : `component_${componentIndex}_${safeExportName(header || `component-${column}`).toLowerCase()}`;
+    const label =
+      role === "measured"
+        ? "Measured"
+        : role === "fit"
+          ? "Total fit"
+          : role === "background"
+            ? "Shirley background"
+            : cleanAdvantageLabel(header || `Component ${componentIndex + 1}`);
+    series.push({
+      id,
+      label,
+      color:
+        role === "measured"
+          ? "#1f2937"
+          : role === "fit"
+            ? "#D62728"
+            : role === "background"
+              ? "#7A7A7A"
+              : xpsComponentColor(componentIndex),
+      points,
+      pointCount: points.length,
+      component: role === "component",
+      sourcePath: `Avantage Excel - ${fileName} - ${sheet.name}`,
+    });
+    if (role === "measured") measuredUsed = true;
+    if (role === "component") componentIndex += 1;
+  }
+
+  if (!series.some((item) => item.id === "measured")) return null;
+  return {
+    id: safeExportName(sheet.name).toLowerCase(),
+    label: cleanCell(sheet.name).replace(/\s+Scan$/i, "") || "XPS region",
+    sourcePath: `Avantage Excel - ${fileName} - ${sheet.name}`,
+    series,
+  };
+};
+
+const extractAdvantagePeakTable = (sheets: WorkbookSheet[]): ExportSection[] => {
+  const sections: ExportSection[] = [];
+  for (const sheet of sheets) {
+    const headerIndex = sheet.rows.findIndex((row) =>
+      row.some((cell) => /^name$/i.test(cleanCell(cell))) &&
+      row.some((cell) => /peak\s+be/i.test(cleanCell(cell))),
+    );
+    if (headerIndex < 0) continue;
+    const headers = (sheet.rows[headerIndex] ?? []).map((cell) => cleanCell(cell) || "column");
+    const rows = sheet.rows
+      .slice(headerIndex + 1)
+      .map((row) => headers.map((_, index) => row[index] ?? ""))
+      .filter((row) => row.some((cell) => cleanCell(cell) !== ""));
+    if (rows.length) {
+      sections.push({
+        title: "advantage_peak_table",
+        headers,
+        units: headers.map((header) => (/be|fwhm/i.test(header) ? "eV" : /atomic/i.test(header) ? "%" : "")),
+        comments: headers.map(() => `Original Avantage peak table column from ${sheet.name}`),
+        rows,
+      });
+    }
+  }
+  return sections;
+};
+
+const parseAdvantageXpsExcel = async (file: File): Promise<AdvantageXpsPreview> => {
+  const sheets = await parseExcelWorkbook(file);
+  const regions = sheets
+    .map((sheet) => buildAdvantageRegion(sheet, file.name))
+    .filter((region): region is AdvantageXpsPreview["regions"][number] => Boolean(region));
+  if (regions.length === 0) {
+    throw new Error("No Avantage XPS scan sheets were found. Expected a sheet with Binding Energy and Counts / s columns.");
+  }
+  return {
+    fileName: file.name,
+    regions,
+    exportSections: extractAdvantagePeakTable(sheets),
+  };
+};
+
 const encryptJson = async (password: string, value: unknown): Promise<EncryptedPayload> => {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -908,7 +1260,7 @@ function axisParts(label: string) {
   return { name: match[1].trim(), unit: match[2].trim() };
 }
 
-function originWideRows(prepared: PreparedSeries[], xLabel: string, yLabel: string) {
+function originWideRows(prepared: PreparedSeries[], xLabel: string, yLabel: string): (string | number)[][] {
   const x = axisParts(xLabel);
   const y = axisParts(yLabel);
   const longNames = prepared.flatMap((item) => [
@@ -922,8 +1274,8 @@ function originWideRows(prepared: PreparedSeries[], xLabel: string, yLabel: stri
     `Y values for ${item.label}; series_id=${item.id}`,
   ]);
   const maxRows = Math.max(...prepared.map((item) => item.chartPoints.length), 0);
-  const dataRows = Array.from({ length: maxRows }, (_, rowIndex) =>
-    prepared.flatMap((item) => {
+  const dataRows: (string | number)[][] = Array.from({ length: maxRows }, (_, rowIndex) =>
+    prepared.flatMap<string | number>((item) => {
       const point = item.chartPoints[rowIndex];
       return point ? [point[0], point[1]] : ["", ""];
     }),
@@ -941,7 +1293,7 @@ function exportPlotData(
 ) {
   const separator = format === "csv" ? "," : "\t";
   const encode = format === "csv" ? csvCell : (value: string | number) => String(value).replace(/\t/g, " ");
-  const blocks = [
+  const blocks: (string | number)[][] = [
     ...originWideRows(prepared, xLabel, yLabel),
     ...sections.flatMap((section) => [
       [],
@@ -1340,6 +1692,9 @@ export default function SpectralDashboard({
   const [uploadLabel, setUploadLabel] = useState("");
   const [uploadPreview, setUploadPreview] = useState<UploadPreview | null>(null);
   const [uploadStatus, setUploadStatus] = useState("Choose a Raman or UV-VIS CSV/TXT file to preview.");
+  const [advantagePreview, setAdvantagePreview] = useState<AdvantageXpsPreview | null>(null);
+  const [advantageRegionId, setAdvantageRegionId] = useState("");
+  const [advantageStatus, setAdvantageStatus] = useState("Choose an Avantage XPS Excel report (.xlsx/.xlsm) to plot locally.");
   const [githubToken, setGithubToken] = useState(() => {
     if (typeof window === "undefined") return "";
     return sessionStorage.getItem("spectra-github-token") ?? "";
@@ -1365,6 +1720,20 @@ export default function SpectralDashboard({
   const completeExportSections = useMemo(
     () => technique === "xps" ? xpsExportSections(activeXpsRegion.label, data.xps) : [],
     [activeXpsRegion.label, data.xps, technique],
+  );
+  const activeAdvantageRegion = advantagePreview?.regions.find((region) => region.id === advantageRegionId)
+    ?? advantagePreview?.regions[0];
+  const advantageSeries = useMemo(
+    () => activeAdvantageRegion ? applyPalette(activeAdvantageRegion.series, paletteId, "xps") : [],
+    [activeAdvantageRegion, paletteId],
+  );
+  const advantageVisibleSeries = useMemo(
+    () => new Set(advantageSeries.filter((series) => series.id !== "background").map((series) => series.id)),
+    [advantageSeries],
+  );
+  const advantageExportSeries = useMemo(
+    () => buildXpsExportSeries(advantageSeries),
+    [advantageSeries],
   );
   const activeRange = plotRangeOptions[technique].find((option) => option.id === rangeId)?.range;
   const inventoryByName = Object.fromEntries(data.inventory.map((item) => [item.name, item]));
@@ -1440,6 +1809,23 @@ export default function SpectralDashboard({
     } catch (error) {
       setUploadPreview(null);
       setUploadStatus(error instanceof Error ? error.message : "File parsing failed.");
+    }
+  };
+
+  const parseAdvantageUpload = async (file: File) => {
+    setAdvantageStatus("Reading Avantage Excel workbook locally...");
+    try {
+      const preview = await parseAdvantageXpsExcel(file);
+      setAdvantagePreview(preview);
+      setAdvantageRegionId(preview.regions[0]?.id ?? "");
+      setTechnique("xps");
+      setAdvantageStatus(
+        `Parsed ${preview.regions.length} XPS region(s) from ${file.name}. No GitHub token is required for local plotting.`,
+      );
+    } catch (error) {
+      setAdvantagePreview(null);
+      setAdvantageRegionId("");
+      setAdvantageStatus(error instanceof Error ? error.message : "Avantage Excel parsing failed.");
     }
   };
 
@@ -2015,6 +2401,75 @@ export default function SpectralDashboard({
               GitHub Pages cannot reuse your browser login to write repository files.
               A fine-grained token is required only when committing uploaded records.
               Record payloads are encrypted with the current access password.
+            </p>
+          </article>
+
+          <article className="upload-panel">
+            <div className="database-card-head">
+              <span>LOCAL PLOT</span>
+              <strong>Avantage XPS Excel</strong>
+            </div>
+            <div className="upload-grid">
+              <label className="file-drop">
+                <span>Select Avantage Excel report</span>
+                <input
+                  type="file"
+                  accept=".xlsx,.xlsm,.xls,.xml,.html,.htm"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) void parseAdvantageUpload(file);
+                  }}
+                />
+              </label>
+            </div>
+
+            {advantagePreview && activeAdvantageRegion && (
+              <div className="upload-preview">
+                <div className="upload-preview-head">
+                  <span>XPS / AVANTAGE</span>
+                  <strong>{activeAdvantageRegion.label}</strong>
+                  <small>
+                    {advantagePreview.regions.length} region(s) - {advantagePreview.fileName}
+                  </small>
+                </div>
+                {advantagePreview.regions.length > 1 && (
+                  <div className="region-tabs compact-tabs">
+                    {advantagePreview.regions.map((region) => (
+                      <button
+                        type="button"
+                        key={region.id}
+                        className={activeAdvantageRegion.id === region.id ? "active" : ""}
+                        onClick={() => setAdvantageRegionId(region.id)}
+                      >
+                        {region.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <SpectrumChart
+                  series={advantageSeries}
+                  xLabel={plotAxisLabels.xps.x}
+                  yLabel={plotAxisLabels.xps.y}
+                  visible={advantageVisibleSeries}
+                  reverseX
+                  yMinFloor={0}
+                  exportTitle={`Avantage ${activeAdvantageRegion.label}`}
+                  exportFileName={`advantage-xps-${activeAdvantageRegion.label}`}
+                  exportPresetId={exportPresetId}
+                  exportSeries={advantageExportSeries}
+                  exportSections={advantagePreview.exportSections}
+                />
+                <p className="database-footnote">
+                  Local-only parsing: measured, total fit, background, and fitted peak columns are read from the workbook in your browser.
+                  Nothing is written to GitHub and no token is used.
+                </p>
+              </div>
+            )}
+
+            <p className="database-status">{advantageStatus}</p>
+            <p className="database-footnote">
+              Supported best: Avantage .xlsx/.xlsm reports with scan sheets such as O1s Scan, Mo3d Scan, XPS Survey, and Peak Table.
+              Legacy binary .xls may need to be re-saved as .xlsx.
             </p>
           </article>
 
