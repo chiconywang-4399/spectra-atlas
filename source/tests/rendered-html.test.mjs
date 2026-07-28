@@ -114,6 +114,15 @@ test("paper plot exports use square frames and publication-scale strokes", async
   assert.match(source, /<g clipPath=\{`url\(#\$\{clipIdRef\.current\}\)`\}>/);
 });
 
+test("plot legends and exported series labels are normalized to English", async () => {
+  const source = await readFile(new URL("../app/SpectralDashboard.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /function englishSeriesLabel/);
+  assert.match(source, /\.replaceAll\(" · ", " - "\)/);
+  assert.match(source, /\.replace\("无 RTP", "no RTP"\)/);
+  assert.ok(source.includes('.replace(/(\\d+)\\s*次均值/g, "$1-run mean")'));
+});
+
 test("XPS export includes deconvolution, background-corrected, residual, and fit metadata", async () => {
   const payload = JSON.parse(
     await readFile(new URL("../app/spectral-data.json", import.meta.url), "utf8"),

@@ -335,7 +335,11 @@ function englishSeriesLabel(item: SpectrumSeries) {
   if (id.includes("o_c_o")) return "O-C=O";
   if (id.includes("c_o")) return "C-O";
   if (id.includes("pi_pi_loss")) return "pi-pi* loss";
-  return item.label;
+  return item.label
+    .replaceAll(" · ", " - ")
+    .replace("无 RTP", "no RTP")
+    .replace(/(\d+)\s*次均值/g, "$1-run mean")
+    .replace("均值", "mean");
 }
 
 function subtractPointSeries(series: SpectrumSeries, background: SpectrumSeries, id: string, label: string): SpectrumSeries {
