@@ -131,28 +131,28 @@ const techniqueInfo: Record<
   raman: {
     eyebrow: "VIBRATIONAL",
     name: "Raman",
-    caption: "晶格振动、D / G / 2D 峰与缺陷信息",
+    caption: "Lattice vibration, D/G/2D bands, and defect-sensitive Raman features",
     accent: "#63e6be",
     code: "RA",
   },
   uvvis: {
     eyebrow: "OPTICAL",
-    name: "UV–VIS–NIR",
-    caption: "300–1690 nm 相对透射与波段比较",
+    name: "UV-VIS-NIR",
+    caption: "Relative transmittance across the 300-1690 nm optical window",
     accent: "#4dabf7",
     code: "UV",
   },
   ftir: {
     eyebrow: "VIBRATIONAL",
     name: "FTIR",
-    caption: "2.5–16.7 µm 中红外透射光谱",
+    caption: "Mid-infrared transmittance converted to wavelength coordinates",
     accent: "#ffb86b",
     code: "IR",
   },
   xps: {
     eyebrow: "SURFACE",
     name: "XPS",
-    caption: "Mo-10 高分辨分峰、拟合与化学态",
+    caption: "High-resolution peak fitting, background, and chemical states",
     accent: "#c77dff",
     code: "XP",
   },
@@ -160,21 +160,21 @@ const techniqueInfo: Record<
 
 const rangeOptions: Record<Technique, { id: string; label: string; range?: [number, number] }[]> = {
   raman: [
-    { id: "full", label: "完整光谱" },
-    { id: "dg", label: "D / G 峰", range: [1200, 1700] },
-    { id: "2d", label: "2D 区", range: [2400, 2900] },
+    { id: "full", label: "Full spectrum" },
+    { id: "dg", label: "D / G bands", range: [1200, 1700] },
+    { id: "2d", label: "2D band", range: [2400, 2900] },
   ],
   uvvis: [
-    { id: "full", label: "全波段" },
-    { id: "vis", label: "可见光", range: [400, 780] },
-    { id: "nir", label: "近红外", range: [780, 1690] },
+    { id: "full", label: "Full range" },
+    { id: "vis", label: "Visible range", range: [400, 780] },
+    { id: "nir", label: "Near infrared", range: [780, 1690] },
   ],
   ftir: [
-    { id: "full", label: "完整光谱" },
-    { id: "functional", label: "官能团区 · 2.5–6.7 µm", range: [2.5, 6.7] },
-    { id: "fingerprint", label: "指纹区 · 6.7–16.7 µm", range: [6.7, 16.7] },
+    { id: "full", label: "Full spectrum" },
+    { id: "functional", label: "Functional groups - 2.5-6.7 um", range: [2.5, 6.7] },
+    { id: "fingerprint", label: "Fingerprint - 6.7-16.7 um", range: [6.7, 16.7] },
   ],
-  xps: [{ id: "full", label: "当前谱区" }],
+  xps: [{ id: "full", label: "Current region" }],
 };
 
 const plotAxisLabels: Record<Technique, { x: string; y: string }> = {
@@ -204,8 +204,8 @@ const plotRangeOptions: Record<Technique, { id: string; label: string; range?: [
   ],
   ftir: [
     { id: "full", label: "Full spectrum" },
-    { id: "functional", label: "Functional groups · 2.5-6.7 um", range: [2.5, 6.7] },
-    { id: "fingerprint", label: "Fingerprint · 6.7-16.7 um", range: [6.7, 16.7] },
+    { id: "functional", label: "Functional groups - 2.5-6.7 um", range: [2.5, 6.7] },
+    { id: "fingerprint", label: "Fingerprint - 6.7-16.7 um", range: [6.7, 16.7] },
   ],
   xps: [{ id: "full", label: "Current region" }],
 };
@@ -338,6 +338,104 @@ function englishSeriesLabel(item: SpectrumSeries) {
   return item.label;
 }
 
+function subtractPointSeries(series: SpectrumSeries, background: SpectrumSeries, id: string, label: string): SpectrumSeries {
+  const backgroundByX = new Map(background.points.map(([x, y]) => [Number(x.toFixed(6)), y]));
+  return {
+    ...series,
+    id,
+    label,
+    color: series.color,
+    points: series.points.map(([x, y]) => [x, y - (backgroundByX.get(Number(x.toFixed(6))) ?? 0)] as Point),
+    pointCount: series.points.length,
+  };
+}
+
+function residualSeries(measured: SpectrumSeries, fit: SpectrumSeries): SpectrumSeries {
+  const fitByX = new Map(fit.points.map(([x, y]) => [Number(x.toFixed(6)), y]));
+  return {
+    ...measured,
+    id: "residual_measured_minus_total_fit",
+    label: "Residual: measured - total fit",
+    color: "#6B7280",
+    points: measured.points.map(([x, y]) => [x, y - (fitByX.get(Number(x.toFixed(6))) ?? 0)] as Point),
+    pointCount: measured.points.length,
+  };
+}
+
+function buildXpsExportSeries(series: SpectrumSeries[]) {
+  const background = series.find((item) => item.id === "background");
+  const measured = series.find((item) => item.id === "measured");
+  const fit = series.find((item) => item.id === "fit");
+  if (!background) return series;
+  const backgroundSubtracted = series
+    .filter((item) => item.id !== "background")
+    .map((item) =>
+      subtractPointSeries(
+        item,
+        background,
+        `${item.id}_background_subtracted`,
+        `${item.label} (background-subtracted)`,
+      ),
+    );
+  return [
+    ...series,
+    ...backgroundSubtracted,
+    ...(measured && fit ? [residualSeries(measured, fit)] : []),
+  ];
+}
+
+function xpsExportSections(
+  regionLabel: string,
+  data: SpectralData["xps"],
+): ExportSection[] {
+  const fitRows = data.fitResults
+    .filter((row) => row.region === regionLabel)
+    .map((row) => [
+      row.region,
+      row.state,
+      row.energy,
+      row.fwhm,
+      row.fraction,
+    ]);
+  const qualityRows = data.fitQuality
+    .filter((row) => row.region === regionLabel)
+    .map((row) => [row.region, row.rSquared, row.aicc]);
+  return [
+    {
+      title: "xps_export_inventory",
+      headers: ["data_product", "description"],
+      rows: [
+        ["measured", "Original measured XPS intensity at each binding-energy point."],
+        ["total_fit", "Total fitted envelope at each binding-energy point."],
+        ["shirley_background", "Shirley background curve used for the fit."],
+        ["deconvoluted_components", "All fitted chemical-state/component curves included in the selected region."],
+        ["background_subtracted", "Measured, total-fit, and component curves after subtracting the Shirley background."],
+        ["residual", "Point-wise residual calculated as measured intensity minus total fit."],
+        ["fit_metadata", "Peak binding energy, FWHM, area fraction, fit quality, and charge reference."],
+      ],
+    },
+    {
+      title: "xps_fit_parameters",
+      headers: ["region", "component", "binding_energy_eV", "fwhm_eV", "area_percent"],
+      rows: fitRows,
+    },
+    {
+      title: "xps_fit_quality",
+      headers: ["region", "r_squared", "aicc"],
+      rows: qualityRows,
+    },
+    {
+      title: "xps_charge_reference",
+      headers: ["reference_line", "target_binding_energy_eV", "applied_shift_eV"],
+      rows: [[
+        data.chargeReference.line,
+        data.chargeReference.target_binding_energy_eV,
+        data.chargeReference.applied_shift_eV,
+      ]],
+    },
+  ];
+}
+
 const compact = (value: number) => {
   const absolute = Math.abs(value);
   if (absolute >= 1000000) return `${(value / 1000000).toFixed(1)}M`;
@@ -348,7 +446,7 @@ const compact = (value: number) => {
 };
 
 const fixed = (value: number, digits = 1) =>
-  Number.isFinite(value) ? value.toFixed(digits) : "—";
+  Number.isFinite(value) ? value.toFixed(digits) : "NA";
 
 const uploadAxis = (technique: UploadTechnique) =>
   technique === "raman"
@@ -393,7 +491,7 @@ const parseSpectrumText = (
   }
 
   if (points.length < 2) {
-    throw new Error("没有解析到足够的两列数值数据。请使用 CSV/TXT，并确保每行至少包含 x 与 y。");
+    throw new Error("Could not parse enough two-column numeric data. Use CSV/TXT and make sure each row contains at least x and y values.");
   }
 
   points.sort((a, b) => a[0] - b[0]);
@@ -424,8 +522,8 @@ const parseSpectrumText = (
       color: technique === "raman" ? "#9ff2d7" : "#8ecbff",
       points: sampledPoints,
       pointCount: plottedPoints.length,
-      note: shouldPercentScale ? "UV–VIS 数据检测为 0–1 区间，已按百分比显示。" : undefined,
-      sourcePath: `GitHub database upload · ${fileName}`,
+      note: shouldPercentScale ? "UV-VIS values were detected in the 0-1 range and converted to percent." : undefined,
+      sourcePath: `GitHub database upload - ${fileName}`,
     },
   };
 };
@@ -508,7 +606,7 @@ const loadSqlJs = (() => {
       );
       const start = () => {
         if (!window.initSqlJs) {
-          reject(new Error("SQLite 引擎未加载。"));
+          reject(new Error("SQLite engine was not loaded."));
           return;
         }
         window
@@ -522,7 +620,7 @@ const loadSqlJs = (() => {
       }
       if (existing) {
         existing.addEventListener("load", start, { once: true });
-        existing.addEventListener("error", () => reject(new Error("SQLite 脚本加载失败。")), {
+        existing.addEventListener("error", () => reject(new Error("SQLite script failed to load.")), {
           once: true,
         });
         return;
@@ -532,7 +630,7 @@ const loadSqlJs = (() => {
       script.async = true;
       script.dataset.spectraSqlite = "true";
       script.addEventListener("load", start, { once: true });
-      script.addEventListener("error", () => reject(new Error("SQLite 脚本加载失败。")), {
+      script.addEventListener("error", () => reject(new Error("SQLite script failed to load.")), {
         once: true,
       });
       document.head.appendChild(script);
@@ -645,6 +743,11 @@ function nearestPoint(points: Point[], targetX: number) {
 }
 
 type PreparedSeries = SpectrumSeries & { chartPoints: Point[] };
+type ExportSection = {
+  title: string;
+  headers: string[];
+  rows: (string | number)[][];
+};
 
 function exportGeometry(presetId: ChartExportPresetId) {
   const preset = exportPresets[presetId] ?? exportPresets["paper-single"];
@@ -716,6 +819,10 @@ function serializeChartSvg(svg: SVGSVGElement, title: string, presetId: ChartExp
   clone.setAttribute("width", geometry.widthValue);
   clone.setAttribute("height", geometry.heightValue);
   clone.setAttribute("viewBox", `0 0 ${geometry.viewWidth} ${geometry.viewHeight}`);
+  clone.querySelectorAll<SVGRectElement>(".plot-surface").forEach((rect) => {
+    rect.setAttribute("rx", "0");
+    rect.setAttribute("ry", "0");
+  });
   clone.querySelectorAll<SVGPathElement>("path[data-export-line]").forEach((path) => {
     const seriesId = path.dataset.seriesId;
     const lineWidth =
@@ -787,6 +894,7 @@ function exportPlotData(
   yLabel: string,
   fileStem: string,
   format: "csv" | "txt",
+  sections: ExportSection[] = [],
 ) {
   const headers = ["series_id", "series_label", "x_label", "y_label", "x", "y"];
   const rows = prepared.flatMap((item) =>
@@ -794,11 +902,38 @@ function exportPlotData(
   );
   const separator = format === "csv" ? "," : "\t";
   const encode = format === "csv" ? csvCell : (value: string | number) => String(value).replace(/\t/g, " ");
-  const content = [headers, ...rows].map((row) => row.map(encode).join(separator)).join("\n");
+  const blocks = [
+    ["plot_series_data"],
+    headers,
+    ...rows,
+    ...sections.flatMap((section) => [
+      [],
+      [section.title],
+      section.headers,
+      ...section.rows,
+    ]),
+  ];
+  const content = blocks.map((row) => row.map(encode).join(separator)).join("\n");
   downloadBlob(
     new Blob([`\uFEFF${content}`], { type: format === "csv" ? "text/csv;charset=utf-8" : "text/plain;charset=utf-8" }),
     `${safeExportName(fileStem)}.${format}`,
   );
+}
+
+function prepareSpectrumSeries(series: SpectrumSeries[], range: [number, number] | undefined, normalize: boolean | undefined) {
+  return series
+    .map((item) => {
+      const filtered = range
+        ? item.points.filter(([x]) => x >= Math.min(...range) && x <= Math.max(...range))
+        : item.points;
+      if (!normalize) return { ...item, chartPoints: filtered };
+      const maxY = Math.max(...filtered.map((point) => Math.abs(point[1])), 1);
+      return {
+        ...item,
+        chartPoints: filtered.map(([x, y]) => [x, (y / maxY) * 100] as Point),
+      };
+    })
+    .filter((item) => item.chartPoints.length > 1);
 }
 
 function SpectrumChart({
@@ -814,6 +949,8 @@ function SpectrumChart({
   exportTitle,
   exportFileName,
   exportPresetId = "paper-single",
+  exportSeries,
+  exportSections = [],
 }: {
   series: SpectrumSeries[];
   xLabel: string;
@@ -827,6 +964,8 @@ function SpectrumChart({
   exportTitle?: string;
   exportFileName?: string;
   exportPresetId?: ChartExportPresetId;
+  exportSeries?: SpectrumSeries[];
+  exportSections?: ExportSection[];
 }) {
   const [hover, setHover] = useState<{
     viewX: number;
@@ -837,23 +976,15 @@ function SpectrumChart({
   } | null>(null);
   const frameRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
+  const clipIdRef = useRef(`plot-clip-${Math.random().toString(36).slice(2)}`);
 
   const prepared = useMemo(() => {
-    return series
-      .filter((item) => visible.has(item.id))
-      .map((item) => {
-        const filtered = range
-          ? item.points.filter(([x]) => x >= Math.min(...range) && x <= Math.max(...range))
-          : item.points;
-        if (!normalize) return { ...item, chartPoints: filtered };
-        const maxY = Math.max(...filtered.map((point) => Math.abs(point[1])), 1);
-        return {
-          ...item,
-          chartPoints: filtered.map(([x, y]) => [x, (y / maxY) * 100] as Point),
-        };
-      })
-      .filter((item) => item.chartPoints.length > 1);
+    return prepareSpectrumSeries(series.filter((item) => visible.has(item.id)), range, normalize);
   }, [normalize, range, series, visible]);
+  const exportPrepared = useMemo(
+    () => prepareSpectrumSeries(exportSeries ?? series, range, normalize),
+    [exportSeries, normalize, range, series],
+  );
 
   const chart = useMemo(() => {
     const allPoints = prepared.flatMap((item) => item.chartPoints);
@@ -956,11 +1087,12 @@ function SpectrumChart({
             type="button"
             onClick={() =>
               exportPlotData(
-                prepared,
+                exportPrepared,
                 xLabel,
                 normalize ? "Normalized intensity (%)" : yLabel,
                 exportFileName ?? exportTitle ?? "spectra-chart",
                 "csv",
+                exportSections,
               )
             }
           >
@@ -970,11 +1102,12 @@ function SpectrumChart({
             type="button"
             onClick={() =>
               exportPlotData(
-                prepared,
+                exportPrepared,
                 xLabel,
                 normalize ? "Normalized intensity (%)" : yLabel,
                 exportFileName ?? exportTitle ?? "spectra-chart",
                 "txt",
+                exportSections,
               )
             }
           >
@@ -1029,9 +1162,15 @@ function SpectrumChart({
             y={margin.top}
             width={plotWidth}
             height={plotHeight}
-            rx="8"
+            rx="0"
+            ry="0"
             className="plot-surface"
           />
+          <defs>
+            <clipPath id={clipIdRef.current}>
+              <rect x={margin.left} y={margin.top} width={plotWidth} height={plotHeight} />
+            </clipPath>
+          </defs>
           {yTicks.map((tick) => (
             <g key={`y-${tick}`}>
               <line
@@ -1082,21 +1221,23 @@ function SpectrumChart({
           >
             {normalize ? "Normalized intensity (%)" : yLabel}
           </text>
-          {prepared.map((item) => (
-            <path
-              key={item.id}
-              data-export-line="true"
-              data-series-id={item.id}
-              data-series-label={item.label}
-              d={makePath(item.chartPoints)}
-              fill="none"
-              stroke={item.color}
-              strokeWidth={item.id === "measured" ? 1.7 : item.id === "fit" ? 2.6 : 2}
-              strokeOpacity={item.id === "background" ? 0.7 : 0.94}
-              strokeDasharray={item.id === "background" ? "7 6" : undefined}
-              vectorEffect="non-scaling-stroke"
-            />
-          ))}
+          <g clipPath={`url(#${clipIdRef.current})`}>
+            {prepared.map((item) => (
+              <path
+                key={item.id}
+                data-export-line="true"
+                data-series-id={item.id}
+                data-series-label={item.label}
+                d={makePath(item.chartPoints)}
+                fill="none"
+                stroke={item.color}
+                strokeWidth={item.id === "measured" ? 1.7 : item.id === "fit" ? 2.6 : 2}
+                strokeOpacity={item.id === "background" ? 0.7 : 0.94}
+                strokeDasharray={item.id === "background" ? "7 6" : undefined}
+                vectorEffect="non-scaling-stroke"
+              />
+            ))}
+          </g>
           {hover && (
             <line
               x1={hover.viewX}
@@ -1150,7 +1291,7 @@ export default function SpectralDashboard({
   const [archiveQuery, setArchiveQuery] = useState("");
   const [databaseQuery, setDatabaseQuery] = useState("");
   const [databaseRecords, setDatabaseRecords] = useState<SpectralDatabaseRecord[]>([]);
-  const [databaseStatus, setDatabaseStatus] = useState("正在读取 GitHub SQLite 数据库…");
+  const [databaseStatus, setDatabaseStatus] = useState("Loading GitHub SQLite database...");
   const [databaseSeries, setDatabaseSeries] = useState<{
     technique: Technique;
     axis: { x: string; y: string };
@@ -1159,7 +1300,7 @@ export default function SpectralDashboard({
   const [uploadTechnique, setUploadTechnique] = useState<UploadTechnique>("raman");
   const [uploadLabel, setUploadLabel] = useState("");
   const [uploadPreview, setUploadPreview] = useState<UploadPreview | null>(null);
-  const [uploadStatus, setUploadStatus] = useState("选择 Raman 或 UV–VIS 的 CSV/TXT 文件即可预览。");
+  const [uploadStatus, setUploadStatus] = useState("Choose a Raman or UV-VIS CSV/TXT file to preview.");
   const [githubToken, setGithubToken] = useState(() => {
     if (typeof window === "undefined") return "";
     return sessionStorage.getItem("spectra-github-token") ?? "";
@@ -1177,6 +1318,14 @@ export default function SpectralDashboard({
   const activeSeries = useMemo(
     () => applyPalette(rawActiveSeries, paletteId, technique),
     [paletteId, rawActiveSeries, technique],
+  );
+  const completeExportSeries = useMemo(
+    () => technique === "xps" ? buildXpsExportSeries(activeSeries) : activeSeries,
+    [activeSeries, technique],
+  );
+  const completeExportSections = useMemo(
+    () => technique === "xps" ? xpsExportSections(activeXpsRegion.label, data.xps) : [],
+    [activeXpsRegion.label, data.xps, technique],
   );
   const activeRange = plotRangeOptions[technique].find((option) => option.id === rangeId)?.range;
   const inventoryByName = Object.fromEntries(data.inventory.map((item) => [item.name, item]));
@@ -1200,13 +1349,13 @@ export default function SpectralDashboard({
         const records = rowsFromDatabase(db);
         db.close();
         setDatabaseRecords(records);
-        setDatabaseStatus(`已载入 SQLite 数据库：${records.length} 条记录。`);
+        setDatabaseStatus(`Loaded SQLite database: ${records.length} records.`);
       })
       .catch((error) => {
         if (cancelled) return;
         console.warn(error);
         setDatabaseRecords([]);
-        setDatabaseStatus("SQLite 数据库暂不可用；上传第一条数据时会自动建立。");
+        setDatabaseStatus("SQLite database is not available yet; it will be created after the first upload.");
       });
     return () => {
       cancelled = true;
@@ -1228,7 +1377,7 @@ export default function SpectralDashboard({
   };
 
   const parseUpload = async (file: File) => {
-    setUploadStatus("正在解析文件…");
+    setUploadStatus("Parsing file...");
     try {
       const rawText = await file.text();
       const digest = await sha256Hex(rawText);
@@ -1247,32 +1396,32 @@ export default function SpectralDashboard({
       });
       setTechnique(preview.technique);
       setUploadStatus(
-        `已解析 ${preview.series.pointCount?.toLocaleString("zh-CN")} 个点；可先查看曲线，确认后再写入 GitHub SQLite 数据库。`,
+        `Parsed ${preview.series.pointCount?.toLocaleString("zh-CN")} points. Review the curve before writing it to the GitHub SQLite database.`,
       );
     } catch (error) {
       setUploadPreview(null);
-      setUploadStatus(error instanceof Error ? error.message : "文件解析失败。");
+      setUploadStatus(error instanceof Error ? error.message : "File parsing failed.");
     }
   };
 
   const commitUploadToGithub = async () => {
     if (!uploadPreview) {
-      setUploadStatus("请先选择并解析一个 Raman 或 UV–VIS 文件。");
+      setUploadStatus("Choose and parse a Raman or UV-VIS file first.");
       return;
     }
     if (!accessPassword) {
-      setUploadStatus("当前入口没有访问密码，无法加密写入；请从 GitHub Pages 密码页进入后再上传。");
+      setUploadStatus("No access password is available in this session, so encrypted upload is disabled.");
       return;
     }
     const token = githubToken.trim();
     if (!token) {
-      setUploadStatus("请填写 GitHub fine-grained token，权限至少需要 Contents: Read and Write。");
+      setUploadStatus("Enter a GitHub fine-grained token with Contents: Read and Write permission.");
       return;
     }
 
     try {
       sessionStorage.setItem("spectra-github-token", token);
-      setUploadStatus("正在加密并写入 SQLite 数据库…");
+      setUploadStatus("Encrypting and writing to the SQLite database...");
 
       const SQL = await loadSqlJs();
       const currentDatabase = await fetchGithubDatabase(token);
@@ -1367,10 +1516,10 @@ export default function SpectralDashboard({
       }
 
       setDatabaseRecords(nextRows);
-      setDatabaseStatus(`已写入 SQLite 数据库：${nextRecord.label}`);
-      setUploadStatus(`上传完成：${DATABASE_PATH}`);
+      setDatabaseStatus(`Wrote to SQLite database: ${nextRecord.label}`);
+      setUploadStatus(`Upload complete: ${DATABASE_PATH}`);
     } catch (error) {
-      setUploadStatus(error instanceof Error ? error.message : "写入 GitHub 失败。");
+      setUploadStatus(error instanceof Error ? error.message : "GitHub write failed.");
     }
   };
 
@@ -1379,15 +1528,15 @@ export default function SpectralDashboard({
       !record.encryptedRecord ||
       !["raman", "uvvis", "ftir", "xps"].includes(record.technique)
     ) {
-      setDatabaseStatus("这条 SQLite 记录不是可直接绘图的光谱记录。");
+      setDatabaseStatus("This SQLite record is not a directly plottable spectrum record.");
       return;
     }
     if (!accessPassword) {
-      setDatabaseStatus("当前入口没有访问密码，无法解密数据库记录。");
+      setDatabaseStatus("No access password is available in this session, so the database record cannot be decrypted.");
       return;
     }
     try {
-      setDatabaseStatus(`正在解密 ${record.label}…`);
+      setDatabaseStatus(`Decrypting ${record.label}...`);
       const stored = await decryptJson<{
         id: string;
         technique: Technique;
@@ -1401,14 +1550,14 @@ export default function SpectralDashboard({
         color: stored.technique === "raman" ? "#9ff2d7" : "#8ecbff",
         points: stored.points,
         pointCount: record.pointCount,
-        sourcePath: `SQLite database · ${DATABASE_PATH}`,
+        sourcePath: `SQLite database - ${DATABASE_PATH}`,
       };
       setDatabaseSeries({ technique: stored.technique, axis: stored.axis, series });
       setTechnique(stored.technique);
-      setDatabaseStatus(`已载入并绘图：${stored.label}`);
+      setDatabaseStatus(`Loaded and plotted: ${stored.label}`);
       document.getElementById("explorer")?.scrollIntoView({ behavior: "smooth", block: "start" });
     } catch (error) {
-      setDatabaseStatus(error instanceof Error ? error.message : "SQLite 记录读取失败。");
+      setDatabaseStatus(error instanceof Error ? error.message : "SQLite record loading failed.");
     }
   };
 
@@ -1442,19 +1591,19 @@ export default function SpectralDashboard({
   return (
     <main>
       <header className="site-header">
-        <a className="brand" href="#top" aria-label="返回顶部">
+        <a className="brand" href="#top" aria-label="Back to top">
           <span className="brand-mark">SA</span>
           <span>
             <strong>Spectra Atlas</strong>
-            <small>材料表征数据中枢</small>
+            <small>Materials characterization data hub</small>
           </span>
         </a>
-        <nav aria-label="主导航">
-          <a href="#overview">总览</a>
-          <a href="#explorer">光谱对比</a>
-          <a href="#github-database">GitHub 数据库</a>
-          <a href="#xps-insights">拟合结果</a>
-          <a href="#archive">数据档案</a>
+        <nav aria-label="Main navigation">
+          <a href="#overview">Overview</a>
+          <a href="#explorer">Spectra</a>
+          <a href="#github-database">GitHub database</a>
+          <a href="#xps-insights">Fit results</a>
+          <a href="#archive">Archive</a>
         </nav>
         <span className="header-status">
           <i />
@@ -1463,7 +1612,7 @@ export default function SpectralDashboard({
             <small>{currentUser.email}</small>
           </span>
           <a className="signout-link" href={signOutPath}>
-            退出
+            Sign out
           </a>
         </span>
       </header>
@@ -1471,43 +1620,43 @@ export default function SpectralDashboard({
       <section className="hero section-shell" id="top">
         <div className="hero-copy">
           <p className="kicker">
-            MATERIALS CHARACTERIZATION · 2026
+            MATERIALS CHARACTERIZATION - 2026
           </p>
           <h1>
-            把分散的表征数据，
+            Turn scattered characterization data
             <br />
-            <span>变成可比较的证据。</span>
+            <span>into comparable spectral evidence.</span>
           </h1>
           <p className="hero-lead">
-            汇总 Raman、UV–VIS、FTIR 与 XPS 原始光谱、处理结果和拟合参数。
-            每条展示曲线都可回溯到“量测”目录中的真实文件。
+            Raman, UV-VIS-NIR, FTIR, and XPS spectra are indexed, plotted,
+            and kept traceable to the measurement archive.
           </p>
           <div className="hero-actions">
             <button type="button" className="primary-action" onClick={() => selectTechnique("raman")}>
-              进入光谱工作台
+              Open spectra workbench
               <span aria-hidden="true">↗</span>
             </button>
             <a className="secondary-action" href="#archive">
-              查看数据清单
+              View data archive
             </a>
           </div>
-          <div className="hero-metrics" aria-label="数据集摘要">
+          <div className="hero-metrics" aria-label="Dataset summary">
             <div>
               <strong>{data.totals.files.toLocaleString("zh-CN")}</strong>
-              <span>表征文件</span>
+              <span>Indexed files</span>
             </div>
             <div>
               <strong>{data.totals.plottedSeries}</strong>
-              <span>可视化曲线</span>
+              <span>Plotted series</span>
             </div>
             <div>
               <strong>{data.totals.sizeMb} MB</strong>
-              <span>已索引数据</span>
+              <span>Indexed data</span>
             </div>
           </div>
         </div>
 
-        <div className="hero-panel" aria-label="数据构成">
+        <div className="hero-panel" aria-label="Data composition">
           <div className="panel-head">
             <span>DATA COMPOSITION</span>
             <span className="live-pill">LIVE INDEX</span>
@@ -1516,7 +1665,7 @@ export default function SpectralDashboard({
             <div className="composition-ring">
               <div>
                 <strong>4</strong>
-                <span>核心表征</span>
+                <span>Core methods</span>
               </div>
             </div>
             <div className="composition-list">
@@ -1537,7 +1686,7 @@ export default function SpectralDashboard({
             </div>
           </div>
           <div className="panel-foot">
-            <span>最后索引</span>
+            <span>Last indexed</span>
             <strong>{new Date(data.generatedAt).toLocaleDateString("zh-CN")}</strong>
           </div>
         </div>
@@ -1546,10 +1695,10 @@ export default function SpectralDashboard({
       <section className="overview section-shell" id="overview">
         <div className="section-heading">
           <div>
-            <p className="kicker">01 · OVERVIEW</p>
-            <h2>四种表征，同一条证据链</h2>
+            <p className="kicker">01 - OVERVIEW</p>
+            <h2>Four characterization methods, one evidence chain</h2>
           </div>
-          <p>从结构和缺陷，到光学响应、化学键与表面价态。</p>
+          <p>Structure, defects, optical response, chemical bonding, and surface states in one searchable workspace.</p>
         </div>
         <div className="technique-grid">
           {(["raman", "uvvis", "ftir", "xps"] as Technique[]).map((item, index) => {
@@ -1570,7 +1719,7 @@ export default function SpectralDashboard({
                 <h3>{info.name}</h3>
                 <p>{info.caption}</p>
                 <div className="technique-meta">
-                  <span>{inventory?.files ?? 0} 文件</span>
+                  <span>{inventory?.files ?? 0} 鏂囦欢</span>
                   <span>{inventory?.sizeMb ?? 0} MB</span>
                 </div>
               </button>
@@ -1583,15 +1732,15 @@ export default function SpectralDashboard({
         <div className="section-shell">
           <div className="section-heading light">
             <div>
-              <p className="kicker">02 · SPECTRA EXPLORER</p>
-              <h2>交互式光谱工作台</h2>
+              <p className="kicker">02 - SPECTRA EXPLORER</p>
+              <h2>Interactive spectra workbench</h2>
             </div>
-            <p>移动指针读取数值；点击图例叠加或隐藏曲线。</p>
+            <p>Move the pointer to read values; click legend items to show or hide series.</p>
           </div>
 
           <div className="workbench">
             <div className="workbench-top">
-              <div className="technique-tabs" role="tablist" aria-label="选择表征类型">
+              <div className="technique-tabs" role="tablist" aria-label="Select characterization technique">
                 {(["raman", "uvvis", "ftir", "xps"] as Technique[]).map((item) => (
                   <button
                     type="button"
@@ -1692,7 +1841,7 @@ export default function SpectralDashboard({
               range={activeRange}
               reverseX={technique === "xps"}
               normalize={technique === "raman" && normalizeRaman}
-              yDomain={technique === "ftir" ? [0, 100] : undefined}
+              yDomain={technique === "ftir" || technique === "uvvis" ? [0, 100] : undefined}
               yMinFloor={technique === "xps" ? 0 : undefined}
               exportTitle={
                 technique === "xps"
@@ -1705,6 +1854,8 @@ export default function SpectralDashboard({
                   : `${technique}-${rangeId}`
               }
               exportPresetId={exportPresetId}
+              exportSeries={completeExportSeries}
+              exportSections={completeExportSections}
             />
 
             <div className="series-legend" aria-label="Series legend">
@@ -1722,7 +1873,7 @@ export default function SpectralDashboard({
             </div>
 
             <div className="chart-note">
-              <span>ⓘ</span>
+              <span>i</span>
               {technique === "uvvis"
                 ? "UV-VIS curves are displayed as transmittance versus wavelength. Use the CSV/TXT export to download the visible plotted data."
                 : technique === "xps"
@@ -1738,12 +1889,12 @@ export default function SpectralDashboard({
       <section className="database-section section-shell" id="github-database">
         <div className="section-heading">
           <div>
-            <p className="kicker">03 · GITHUB DATABASE</p>
-            <h2>上传、索引、回读同一套数据</h2>
+            <p className="kicker">03 - GITHUB DATABASE</p>
+            <h2>Upload, index, and reload spectra from one database</h2>
           </div>
           <p>
-            Raman 与 UV–VIS 文件可在浏览器内解析并即时绘图；确认后写入
-            GitHub 仓库中的可检索 SQLite 数据库。
+            Raman and UV-VIS files can be parsed in the browser, previewed as plots,
+            and written to the searchable SQLite database in the GitHub repository.
           </p>
         </div>
 
@@ -1751,29 +1902,29 @@ export default function SpectralDashboard({
           <article className="upload-panel">
             <div className="database-card-head">
               <span>UPLOAD</span>
-              <strong>Raman / UV–VIS</strong>
+              <strong>Raman / UV-VIS</strong>
             </div>
             <div className="upload-grid">
               <label>
-                <span>数据类型</span>
+                <span>Data type</span>
                 <select
                   value={uploadTechnique}
                   onChange={(event) => setUploadTechnique(event.target.value as UploadTechnique)}
                 >
                   <option value="raman">Raman</option>
-                  <option value="uvvis">UV–VIS</option>
+                  <option value="uvvis">UV-VIS</option>
                 </select>
               </label>
               <label>
-                <span>样品 / 曲线名称</span>
+                <span>Sample / series name</span>
                 <input
                   value={uploadLabel}
                   onChange={(event) => setUploadLabel(event.target.value)}
-                  placeholder="例如 MoS2-annealed-400s"
+                  placeholder="e.g. MoS2-annealed-400s"
                 />
               </label>
               <label className="file-drop">
-                <span>选择 CSV / TXT / DAT</span>
+                <span>Select CSV / TXT / DAT</span>
                 <input
                   type="file"
                   accept=".csv,.txt,.dat,.tsv"
@@ -1807,23 +1958,24 @@ export default function SpectralDashboard({
 
             <div className="github-token-box">
               <label>
-                <span>GitHub 写入令牌</span>
+                <span>GitHub write token</span>
                 <input
                   type="password"
                   value={githubToken}
                   onChange={(event) => setGithubToken(event.target.value)}
-                  placeholder="fine-grained token · Contents: Read and Write"
+                  placeholder="fine-grained token - Contents: Read and Write"
                 />
               </label>
               <button type="button" className="primary-action" onClick={commitUploadToGithub}>
-                加密写入 SQLite 数据库
+                Encrypt and write to SQLite
                 <span aria-hidden="true">↗</span>
               </button>
             </div>
             <p className="database-status">{uploadStatus}</p>
             <p className="database-footnote">
-              说明：GitHub Pages 不能直接使用你浏览器里的 GitHub 登录态写仓库；写入时需要一次性
-              token。记录内容会用当前访问密码加密，索引只保存方便检索的元数据。
+              GitHub Pages cannot reuse your browser login to write repository files.
+              A fine-grained token is required only when committing uploaded records.
+              Record payloads are encrypted with the current access password.
             </p>
           </article>
 
@@ -1837,7 +1989,7 @@ export default function SpectralDashboard({
               <input
                 value={databaseQuery}
                 onChange={(event) => setDatabaseQuery(event.target.value)}
-                placeholder="搜索样品、文件名、Raman、UV–VIS 或标签"
+                placeholder="Search sample, file name, Raman, UV-VIS, or tags"
               />
             </label>
             <p className="database-status">{databaseStatus}</p>
@@ -1849,22 +2001,22 @@ export default function SpectralDashboard({
                     <strong>{record.label}</strong>
                     <small>{record.sourceFile}</small>
                     <small>
-                      {record.pointCount.toLocaleString("zh-CN")} points ·{" "}
+                      {record.pointCount.toLocaleString("zh-CN")} points -{" "}
                       {record.uploadedAt.slice(0, 10)}
                     </small>
                     {record.xMin !== undefined && record.xMax !== undefined && (
                       <small>
-                        X {fixed(record.xMin, 2)} → {fixed(record.xMax, 2)}
+                        X {fixed(record.xMin, 2)} to {fixed(record.xMax, 2)}
                       </small>
                     )}
                   </div>
                   <button type="button" onClick={() => void loadDatabaseRecord(record)}>
-                    载入绘图
+                    Load plot
                   </button>
                 </div>
               ))}
               {filteredDatabaseRecords.length === 0 && (
-                <div className="database-empty">没有匹配的数据库记录。</div>
+                <div className="database-empty">No matching database records.</div>
               )}
             </div>
           </article>
@@ -1874,26 +2026,26 @@ export default function SpectralDashboard({
       <section className="insights section-shell" id="xps-insights">
         <div className="section-heading">
           <div>
-            <p className="kicker">04 · SIGNALS & FITS</p>
-            <h2>关键读数，一眼定位</h2>
+            <p className="kicker">04 - SIGNALS & FITS</p>
+            <h2>Key readings and fitted parameters</h2>
           </div>
-          <p>将峰位、透射率与拟合质量从曲线中提取出来。</p>
+          <p>Peak positions, transmittance readings, and fitting quality are summarized from the plotted spectra.</p>
         </div>
         <div className="insight-grid">
           <article className="insight-card wide">
             <div className="insight-head">
               <span className="mini-code raman-code">RA</span>
               <div>
-                <small>RAMAN · {featuredRaman.label}</small>
-                <h3>峰位概览</h3>
+                <small>RAMAN - {featuredRaman.label}</small>
+                <h3>Peak overview</h3>
               </div>
               <strong className="confidence">SOURCE DATA</strong>
             </div>
             <div className="peak-strip">
               {[
-                ["D 区", featuredRaman.peaks!.d[0], "cm⁻¹"],
-                ["G 峰", featuredRaman.peaks!.g[0], "cm⁻¹"],
-                ["2D 区", featuredRaman.peaks!.twoD[0], "cm⁻¹"],
+                ["D band", featuredRaman.peaks!.d[0], "cm^-1"],
+                ["G band", featuredRaman.peaks!.g[0], "cm^-1"],
+                ["2D band", featuredRaman.peaks!.twoD[0], "cm^-1"],
               ].map(([label, value, unit]) => (
                 <div key={label as string}>
                   <span>{label}</span>
@@ -1903,8 +2055,7 @@ export default function SpectralDashboard({
               ))}
             </div>
             <p>
-              {featuredRaman.label} 的主强峰位于 G
-              区附近；D、G 与 2D 窗口用于跨样品快速对比。
+              {featuredRaman.label} is summarized by D, G, and 2D peak windows for quick cross-sample comparison.
             </p>
           </article>
 
@@ -1912,8 +2063,8 @@ export default function SpectralDashboard({
             <div className="insight-head">
               <span className="mini-code uv-code">UV</span>
               <div>
-                <small>UV–VIS–NIR · {featuredUvvis.label}</small>
-                <h3>相对透射</h3>
+                <small>UV-VIS-NIR - {featuredUvvis.label}</small>
+                <h3>Relative transmittance</h3>
               </div>
             </div>
             <div className="big-reading">
@@ -1942,13 +2093,13 @@ export default function SpectralDashboard({
             <div className="insight-head">
               <span className="mini-code xps-code">XP</span>
               <div>
-                <small>XPS · {featuredXpsQuality.region}</small>
-                <h3>拟合质量</h3>
+                <small>XPS - {featuredXpsQuality.region}</small>
+                <h3>Fit quality</h3>
               </div>
             </div>
             <div className="big-reading">
               <strong>{featuredXpsQuality.rSquared.toFixed(5)}</strong>
-              <span>R²</span>
+              <span>R^2</span>
             </div>
             <div className="fit-quality-list">
               {data.xps.fitQuality.map((item) => (
@@ -1964,8 +2115,8 @@ export default function SpectralDashboard({
         <div className="chemistry-table">
           <div className="table-heading">
             <div>
-              <small>{data.xps.sample} · CHEMICAL STATES</small>
-              <h3>XPS 分峰参数</h3>
+              <small>{data.xps.sample} - CHEMICAL STATES</small>
+              <h3>XPS peak-fitting parameters</h3>
             </div>
             <span>{data.xps.sampleDate}</span>
           </div>
@@ -1973,11 +2124,11 @@ export default function SpectralDashboard({
             <table>
               <thead>
                 <tr>
-                  <th>谱区</th>
-                  <th>化学态 / 组分</th>
-                  <th>峰位 (eV)</th>
+                  <th>Region</th>
+                  <th>Chemical state / component</th>
+                  <th>Binding energy (eV)</th>
                   <th>FWHM (eV)</th>
-                  <th>面积占比</th>
+                  <th>Area (%)</th>
                 </tr>
               </thead>
               <tbody>
@@ -2004,10 +2155,10 @@ export default function SpectralDashboard({
             </table>
           </div>
           <div className="caveat">
-            <strong>分析边界</strong>
+            <strong>Analysis boundary</strong>
             <span>
-              N 1s 高分辨窗口止于约 410 eV，未覆盖约 412–416 eV 的 Mo 3p₁/₂；
-              因此 N 组分属于暂定结果。
+              The N 1s high-resolution window ends near 410 eV and does not cover the
+              Mo 3p region around 412-416 eV, so N component assignments should be treated as provisional.
             </span>
           </div>
         </div>
@@ -2017,16 +2168,16 @@ export default function SpectralDashboard({
         <div className="section-shell">
           <div className="section-heading light">
             <div>
-              <p className="kicker">05 · DATA ARCHIVE</p>
-              <h2>目录里实际有什么</h2>
+              <p className="kicker">05 - DATA ARCHIVE</p>
+              <h2>What is available in the measurement directory</h2>
             </div>
             <label className="archive-search">
               <span aria-hidden="true">⌕</span>
               <input
                 value={archiveQuery}
                 onChange={(event) => setArchiveQuery(event.target.value)}
-                placeholder="搜索技术或扩展名，例如 CSV"
-                aria-label="搜索数据目录"
+                placeholder="Search technique or extension, e.g. CSV"
+                aria-label="Search data archive"
               />
             </label>
           </div>
@@ -2037,13 +2188,13 @@ export default function SpectralDashboard({
                   <span>{item.name.slice(0, 2).toUpperCase()}</span>
                   <div>
                     <h3>{item.name}</h3>
-                    <small>更新于 {item.newest}</small>
+                    <small>Updated {item.newest}</small>
                   </div>
                   <strong>{item.files}</strong>
                 </div>
                 <div className="archive-stats">
                   <span>{item.sizeMb} MB</span>
-                  <span>{item.extensions.length} 种主要格式</span>
+                  <span>{item.extensions.length} main formats</span>
                 </div>
                 <div className="format-list">
                   {item.extensions.map((entry) => (
@@ -2058,16 +2209,16 @@ export default function SpectralDashboard({
           </div>
           <div className="provenance">
             <div>
-              <strong>数据来源</strong>
-              <span>本地量测归档（原始文件未上传）</span>
+              <strong>Data source</strong>
+              <span>Local measurement archive; raw files are not uploaded here.</span>
             </div>
             <div>
-              <strong>展示策略</strong>
-              <span>只读解析 · 峰形保留抽样 · 源文件不改写</span>
+              <strong>Display strategy</strong>
+              <span>Read-only parsing - peak-preserving sampling - source files remain unchanged.</span>
             </div>
             <div>
-              <strong>版本记录</strong>
-              <span>Git main · 文件清单随生成时间更新</span>
+              <strong>Version record</strong>
+              <span>Git main - file index updates with each data generation run.</span>
             </div>
           </div>
         </div>
@@ -2082,8 +2233,8 @@ export default function SpectralDashboard({
               <small>Materials Characterization</small>
             </span>
           </div>
-          <p>为实验数据浏览、比较与结果复核而构建。</p>
-          <a href="#top">返回顶部 ↑</a>
+          <p>Built for browsing, comparing, exporting, and reviewing experimental spectra.</p>
+          <a href="#top">Back to top ↗</a>
         </div>
       </footer>
     </main>

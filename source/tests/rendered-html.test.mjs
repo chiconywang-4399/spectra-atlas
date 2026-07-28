@@ -81,6 +81,76 @@ test("generated data contains all four requested techniques", async () => {
   assert.ok(payload.totals.files >= 1000);
 });
 
+test("UV-VIS transmittance data and axis are constrained to 0-100 percent", async () => {
+  const payload = JSON.parse(
+    await readFile(new URL("../app/spectral-data.json", import.meta.url), "utf8"),
+  );
+  const source = await readFile(new URL("../app/SpectralDashboard.tsx", import.meta.url), "utf8");
+  const uvvisValues = payload.uvvis.series.flatMap((series) =>
+    series.points.map((point) => point[1]),
+  );
+
+  assert.ok(uvvisValues.length > 0);
+  assert.ok(Math.min(...uvvisValues) >= 0);
+  assert.ok(Math.max(...uvvisValues) <= 100);
+  assert.match(
+    source,
+    /yDomain=\{technique === "ftir" \|\| technique === "uvvis" \? \[0, 100\] : undefined\}/,
+  );
+});
+
+test("paper plot exports use square frames and publication-scale strokes", async () => {
+  const source = await readFile(new URL("../app/SpectralDashboard.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /label: "Paper single column 89 mm"/);
+  assert.match(source, /label: "Paper double column 183 mm"/);
+  assert.match(source, /axisPt: 0\.6/);
+  assert.match(source, /measuredPt: 0\.75/);
+  assert.match(source, /fitPt: 0\.9/);
+  assert.match(source, /componentPt: 0\.7/);
+  assert.match(source, /rx="0"[\s\S]*?ry="0"[\s\S]*?className="plot-surface"/);
+  assert.match(source, /rect\.setAttribute\("rx", "0"\)/);
+  assert.match(source, /rect\.setAttribute\("ry", "0"\)/);
+  assert.match(source, /<g clipPath=\{`url\(#\$\{clipIdRef\.current\}\)`\}>/);
+});
+
+test("XPS export includes deconvolution, background-corrected, residual, and fit metadata", async () => {
+  const payload = JSON.parse(
+    await readFile(new URL("../app/spectral-data.json", import.meta.url), "utf8"),
+  );
+  const source = await readFile(new URL("../app/SpectralDashboard.tsx", import.meta.url), "utf8");
+
+  for (const region of payload.xps.regions) {
+    const ids = new Set(region.series.map((series) => series.id));
+    assert.ok(ids.has("measured"), `${region.label} is missing measured XPS data`);
+    assert.ok(ids.has("fit"), `${region.label} is missing total-fit XPS data`);
+    assert.ok(ids.has("background"), `${region.label} is missing Shirley background data`);
+    assert.ok(
+      region.series.some((series) => !["measured", "fit", "background"].includes(series.id)),
+      `${region.label} is missing fitted component/deconvoluted curves`,
+    );
+    assert.ok(
+      payload.xps.fitResults.some((row) => row.region === region.label),
+      `${region.label} is missing fit parameter rows`,
+    );
+    assert.ok(
+      payload.xps.fitQuality.some((row) => row.region === region.label),
+      `${region.label} is missing fit-quality rows`,
+    );
+  }
+
+  assert.match(payload.xps.chargeReference.line, /C 1s/);
+  assert.equal(typeof payload.xps.chargeReference.target_binding_energy_eV, "number");
+  assert.equal(typeof payload.xps.chargeReference.applied_shift_eV, "number");
+  assert.match(source, /buildXpsExportSeries/);
+  assert.match(source, /background_subtracted/);
+  assert.match(source, /Residual: measured - total fit/);
+  assert.match(source, /xps_export_inventory/);
+  assert.match(source, /xps_fit_parameters/);
+  assert.match(source, /xps_fit_quality/);
+  assert.match(source, /xps_charge_reference/);
+});
+
 test("local secure entry requires a password and serves the authorized dashboard", async (t) => {
   const server = createLocalSecureServer({
     password: "test-password-123",
