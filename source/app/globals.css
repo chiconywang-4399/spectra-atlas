@@ -1250,6 +1250,33 @@ a {
   background: #081416;
 }
 
+.chart-export-actions {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 5;
+  display: flex;
+  gap: 6px;
+}
+
+.chart-export-actions button {
+  min-height: 28px;
+  padding: 0 9px;
+  border: 1px solid rgba(214, 231, 226, 0.18);
+  background: rgba(8, 20, 22, 0.74);
+  color: #c5d2d0;
+  cursor: pointer;
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.chart-export-actions button:hover {
+  border-color: rgba(99, 230, 190, 0.7);
+  color: #e7fff8;
+}
+
 .spectrum-chart {
   display: block;
   width: 100%;

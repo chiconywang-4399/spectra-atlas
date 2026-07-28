@@ -42,10 +42,38 @@ if (digest(decrypted) !== digest(source)) {
 }
 
 const sourceData = JSON.parse(source.toString("utf8"));
+const expectedXpsColors = new Map([
+  ["实测", "#1f2937"],
+  ["总拟合", "#D62728"],
+  ["Shirley 背景", "#7A7A7A"],
+  ["低结合能 Mo⁰/δ⁺", "#0072B2"],
+  ["Mo⁴⁺", "#009E73"],
+  ["Mo⁶⁺", "#E69F00"],
+  ["Mo 3p · 低结合能", "#0072B2"],
+  ["Mo 3p · Mo⁴⁺", "#009E73"],
+  ["Mo 3p · Mo⁶⁺", "#E69F00"],
+  ["N 1s-I", "#56B4E9"],
+  ["N 1s-II", "#CC79A7"],
+  ["晶格 O²⁻", "#0072B2"],
+  ["OH / 缺陷 O", "#009E73"],
+  ["吸附 O", "#E69F00"],
+  ["sp² C=C", "#0072B2"],
+  ["sp³ / 缺陷 C", "#E69F00"],
+  ["C–O", "#009E73"],
+  ["C=O / O–C–O", "#CC79A7"],
+  ["O–C=O", "#D55E00"],
+  ["π–π* loss", "#56B4E9"],
+]);
 for (const region of sourceData.xps.regions ?? []) {
   const background = region.series?.find((series) => series.id === "background");
   if (!background) continue;
   const backgroundMin = Math.min(...background.points.map((point) => point[1]));
+  for (const series of region.series ?? []) {
+    const expectedColor = expectedXpsColors.get(series.label);
+    if (expectedColor && series.color !== expectedColor) {
+      throw new Error(`XPS color mismatch for ${region.label}/${series.label}: ${series.color} !== ${expectedColor}`);
+    }
+  }
   for (const component of region.series.filter((series) => series.component)) {
     const componentMin = Math.min(...component.points.map((point) => point[1]));
     if (componentMin < backgroundMin * 0.5) {

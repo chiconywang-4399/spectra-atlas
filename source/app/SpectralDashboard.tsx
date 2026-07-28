@@ -481,6 +481,82 @@ function nearestPoint(points: Point[], targetX: number) {
   return closest;
 }
 
+const chartExportStyle = `
+  .plot-surface{fill:#ffffff;stroke:#d9ded8;stroke-width:1}
+  .grid-line{stroke:#e6e6df;stroke-width:1}
+  .tick-mark{stroke:#778083;stroke-width:1}
+  .axis-tick{fill:#344042;font-family:Arial,sans-serif;font-size:12px}
+  .axis-label{fill:#1f2937;font-family:Arial,sans-serif;font-size:14px;font-weight:700}
+  .hover-line{display:none}
+`;
+
+function safeExportName(value: string) {
+  return value
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, "-")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .slice(0, 90) || "spectra-chart";
+}
+
+function downloadBlob(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.append(link);
+  link.click();
+  window.setTimeout(() => {
+    link.remove();
+    URL.revokeObjectURL(url);
+  }, 30_000);
+}
+
+function serializeChartSvg(svg: SVGSVGElement, title: string) {
+  const clone = svg.cloneNode(true) as SVGSVGElement;
+  clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  clone.setAttribute("width", "2000");
+  clone.setAttribute("height", "880");
+  const style = document.createElementNS("http://www.w3.org/2000/svg", "style");
+  style.textContent = chartExportStyle;
+  clone.prepend(style);
+  const titleNode = document.createElementNS("http://www.w3.org/2000/svg", "title");
+  titleNode.textContent = title;
+  clone.prepend(titleNode);
+  return `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(clone)}`;
+}
+
+function exportChartSvg(svg: SVGSVGElement, title: string, fileStem: string) {
+  downloadBlob(new Blob([serializeChartSvg(svg, title)], { type: "image/svg+xml;charset=utf-8" }), `${safeExportName(fileStem)}.svg`);
+}
+
+async function exportChartPng(svg: SVGSVGElement, title: string, fileStem: string) {
+  const url = URL.createObjectURL(new Blob([serializeChartSvg(svg, title)], { type: "image/svg+xml;charset=utf-8" }));
+  try {
+    const image = new Image();
+    const loaded = new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error("PNG export failed."));
+    });
+    image.src = url;
+    await loaded;
+    const canvas = document.createElement("canvas");
+    canvas.width = 2000;
+    canvas.height = 880;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Canvas is unavailable.");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const pngBlob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("PNG export failed.")), "image/png");
+    });
+    downloadBlob(pngBlob, `${safeExportName(fileStem)}.png`);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 function SpectrumChart({
   series,
   xLabel,
@@ -491,6 +567,8 @@ function SpectrumChart({
   normalize,
   yDomain,
   yMinFloor,
+  exportTitle,
+  exportFileName,
 }: {
   series: SpectrumSeries[];
   xLabel: string;
@@ -501,6 +579,8 @@ function SpectrumChart({
   normalize?: boolean;
   yDomain?: [number, number];
   yMinFloor?: number;
+  exportTitle?: string;
+  exportFileName?: string;
 }) {
   const [hover, setHover] = useState<{
     viewX: number;
@@ -510,6 +590,7 @@ function SpectrumChart({
     entries: { label: string; color: string; point: Point }[];
   } | null>(null);
   const frameRef = useRef<HTMLDivElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
 
   const prepared = useMemo(() => {
     return series
@@ -623,10 +704,31 @@ function SpectrumChart({
 
   return (
     <div className="chart-frame" ref={frameRef}>
+      {prepared.length > 0 && (
+        <div className="chart-export-actions" aria-label="导出当前图像">
+          <button
+            type="button"
+            onClick={() => {
+              if (svgRef.current) exportChartSvg(svgRef.current, exportTitle ?? xLabel, exportFileName ?? exportTitle ?? "spectra-chart");
+            }}
+          >
+            导出 SVG
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (svgRef.current) void exportChartPng(svgRef.current, exportTitle ?? xLabel, exportFileName ?? exportTitle ?? "spectra-chart");
+            }}
+          >
+            导出 PNG
+          </button>
+        </div>
+      )}
       {prepared.length === 0 ? (
         <div className="chart-empty">选择至少一条曲线以继续比较</div>
       ) : (
         <svg
+          ref={svgRef}
           className="spectrum-chart"
           viewBox={`0 0 ${width} ${height}`}
           role="img"
@@ -1272,6 +1374,16 @@ export default function SpectralDashboard({
               normalize={technique === "raman" && normalizeRaman}
               yDomain={technique === "ftir" ? [0, 100] : undefined}
               yMinFloor={technique === "xps" ? 0 : undefined}
+              exportTitle={
+                technique === "xps"
+                  ? `${data.xps.sample} · ${activeXpsRegion.label}`
+                  : `${techniqueInfo[technique].name} spectra`
+              }
+              exportFileName={
+                technique === "xps"
+                  ? `xps-${data.xps.sample}-${activeXpsRegion.id}`
+                  : `${technique}-${rangeId}`
+              }
             />
 
             <div className="series-legend" aria-label="曲线图例">
@@ -1365,6 +1477,8 @@ export default function SpectralDashboard({
                   yLabel={uploadPreview.axis.y}
                   visible={new Set([uploadPreview.series.id])}
                   normalize={uploadPreview.technique === "raman"}
+                  exportTitle={uploadPreview.series.label}
+                  exportFileName={`upload-${uploadPreview.technique}-${uploadPreview.series.label}`}
                 />
               </div>
             )}

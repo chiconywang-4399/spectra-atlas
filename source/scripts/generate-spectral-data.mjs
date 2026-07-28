@@ -306,6 +306,46 @@ const xpsRegionFiles = [
 ];
 const xpsRegions = [];
 
+const xpsComponentLabels = new Map([
+  ["component_low_BE_Mo_0_counts_per_s", "低结合能 Mo⁰/δ⁺"],
+  ["component_Mo_4_counts_per_s", "Mo⁴⁺"],
+  ["component_Mo_6_counts_per_s", "Mo⁶⁺"],
+  ["component_Mo_3p_low_BE_counts_per_s", "Mo 3p · 低结合能"],
+  ["component_Mo_3p_Mo_4_counts_per_s", "Mo 3p · Mo⁴⁺"],
+  ["component_Mo_3p_Mo_6_counts_per_s", "Mo 3p · Mo⁶⁺"],
+  ["component_N_1s_I_counts_per_s", "N 1s-I"],
+  ["component_N_1s_II_counts_per_s", "N 1s-II"],
+  ["component_lattice_O_2_counts_per_s", "晶格 O²⁻"],
+  ["component_OH_defect_O_counts_per_s", "OH / 缺陷 O"],
+  ["component_adsorbed_O_counts_per_s", "吸附 O"],
+  ["component_sp_2_C_C_counts_per_s", "sp² C=C"],
+  ["component_sp_3_defect_C_counts_per_s", "sp³ / 缺陷 C"],
+  ["component_C_O_counts_per_s", "C–O"],
+  ["component_C_O_O_C_O_counts_per_s", "C=O / O–C–O"],
+  ["component_O_C_O_counts_per_s", "O–C=O"],
+  ["component_pi_pi_loss_counts_per_s", "π–π* loss"],
+]);
+
+const xpsComponentColors = new Map([
+  ["component_low_BE_Mo_0_counts_per_s", "#0072B2"],
+  ["component_Mo_4_counts_per_s", "#009E73"],
+  ["component_Mo_6_counts_per_s", "#E69F00"],
+  ["component_Mo_3p_low_BE_counts_per_s", "#0072B2"],
+  ["component_Mo_3p_Mo_4_counts_per_s", "#009E73"],
+  ["component_Mo_3p_Mo_6_counts_per_s", "#E69F00"],
+  ["component_N_1s_I_counts_per_s", "#56B4E9"],
+  ["component_N_1s_II_counts_per_s", "#CC79A7"],
+  ["component_lattice_O_2_counts_per_s", "#0072B2"],
+  ["component_OH_defect_O_counts_per_s", "#009E73"],
+  ["component_adsorbed_O_counts_per_s", "#E69F00"],
+  ["component_sp_2_C_C_counts_per_s", "#0072B2"],
+  ["component_sp_3_defect_C_counts_per_s", "#E69F00"],
+  ["component_C_O_counts_per_s", "#009E73"],
+  ["component_C_O_O_C_O_counts_per_s", "#CC79A7"],
+  ["component_O_C_O_counts_per_s", "#D55E00"],
+  ["component_pi_pi_loss_counts_per_s", "#56B4E9"],
+]);
+
 for (const [id, label, filename] of xpsRegionFiles) {
   const rows = await readCsvObjects(path.join(xpsRoot, filename));
   const headers = Object.keys(rows[0]);
@@ -314,19 +354,19 @@ for (const [id, label, filename] of xpsRegionFiles) {
     {
       id: "measured",
       label: "实测",
-      color: "#edf2ff",
+      color: "#1f2937",
       points: rows.map((row) => [toNumber(row.binding_energy_eV), toNumber(row.measured_counts_per_s)]),
     },
     {
       id: "fit",
       label: "总拟合",
-      color: "#ff6b6b",
+      color: "#D62728",
       points: rows.map((row) => [toNumber(row.binding_energy_eV), toNumber(row.total_fit_counts_per_s)]),
     },
     {
       id: "background",
       label: "Shirley 背景",
-      color: "#868e96",
+      color: "#7A7A7A",
       points: rows.map((row) => [toNumber(row.binding_energy_eV), toNumber(row.shirley_background_counts_per_s)]),
     },
     ...componentHeaders.map((header, index) => ({
@@ -350,6 +390,11 @@ for (const [id, label, filename] of xpsRegionFiles) {
       note: "Component intensity is rendered on top of the Shirley background for raw-count XPS fitting plots.",
     })),
   ];
+  for (const item of series) {
+    if (!item.component) continue;
+    item.label = xpsComponentLabels.get(item.id) ?? item.label;
+    item.color = xpsComponentColors.get(item.id) ?? item.color;
+  }
   xpsRegions.push({
     id,
     label,

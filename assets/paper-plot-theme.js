@@ -78,26 +78,12 @@ function addPaletteControl() {
 
 function applyPlotStyle() {
   const technique = currentTechnique();
-  const palette = palettes[technique] || palettes.raman;
 
   document.querySelectorAll(".spectrum-chart").forEach((svg) => {
     svg.querySelectorAll(".axis-tick").forEach((tick) => {
       const y = Number(tick.getAttribute("y") || 0);
       if (y > 380) tick.textContent = fullNumber(tick.textContent);
     });
-
-    [...svg.querySelectorAll("path")]
-      .filter((path) => path.getAttribute("stroke") && path.getAttribute("d"))
-      .forEach((path, index) => {
-        path.setAttribute("stroke", palette[index % palette.length]);
-        path.setAttribute("stroke-width", index === 1 && technique === "xps" ? "2.6" : "2");
-        path.setAttribute("stroke-opacity", "0.94");
-      });
-  });
-
-  document.querySelectorAll(".series-legend button").forEach((button, index) => {
-    const swatch = button.querySelector("span");
-    if (swatch) swatch.style.background = palette[index % palette.length];
   });
 
   document.querySelectorAll(".technique-tabs button").forEach((button) => {
