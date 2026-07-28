@@ -94,6 +94,9 @@ await copyFile(
 
 const paperThemeCss = resolve(PROJECT_ROOT, "..", "assets", "paper-plot-theme.css");
 const paperThemeJs = resolve(PROJECT_ROOT, "..", "assets", "paper-plot-theme.js");
+const sqliteDatabase = resolve(PROJECT_ROOT, "..", "data", "spectra.sqlite");
+const sqliteJs = resolve(PROJECT_ROOT, "node_modules", "sql.js", "dist", "sql-wasm.js");
+const sqliteWasm = resolve(PROJECT_ROOT, "node_modules", "sql.js", "dist", "sql-wasm.wasm");
 
 await copyFile(
   paperThemeCss,
@@ -103,6 +106,10 @@ await copyFile(
   paperThemeJs,
   resolve(OUTPUT_ROOT, "assets", "paper-plot-theme.js"),
 );
+await copyFile(sqliteJs, resolve(OUTPUT_ROOT, "assets", "sql-wasm.js"));
+await copyFile(sqliteWasm, resolve(OUTPUT_ROOT, "assets", "sql-wasm.wasm"));
+await mkdir(resolve(OUTPUT_ROOT, "data"), { recursive: true });
+await copyFile(sqliteDatabase, resolve(OUTPUT_ROOT, "data", "spectra.sqlite"));
 
 async function injectPaperThemeAssets(htmlPath) {
   const html = await readFile(htmlPath, "utf8");

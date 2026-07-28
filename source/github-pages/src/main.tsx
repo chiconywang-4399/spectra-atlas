@@ -75,6 +75,7 @@ async function decryptData(password: string): Promise<SpectralData> {
 function EncryptedGate() {
   const [data, setData] = useState<SpectralData | null>(null);
   const [password, setPassword] = useState("");
+  const [accessPassword, setAccessPassword] = useState("");
   const [status, setStatus] = useState<
     "idle" | "decrypting" | "invalid" | "unavailable"
   >("idle");
@@ -86,6 +87,7 @@ function EncryptedGate() {
     setStatus("decrypting");
     try {
       const decrypted = await decryptData(password);
+      setAccessPassword(password);
       setPassword("");
       setData(decrypted);
       setStatus("idle");
@@ -110,6 +112,7 @@ function EncryptedGate() {
           email: "GitHub Pages 加密访问",
         }}
         signOutPath="./"
+        accessPassword={accessPassword}
       />
     );
   }

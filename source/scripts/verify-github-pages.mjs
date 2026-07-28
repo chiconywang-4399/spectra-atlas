@@ -6,6 +6,7 @@ import {
 import { readFile, readdir } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import initSqlJs from "sql.js";
 
 const PROJECT_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const OUTPUT_ROOT = resolve(PROJECT_ROOT, "github-pages-dist");
@@ -86,11 +87,55 @@ if (files.some((path) => path.endsWith("spectral-data.json"))) {
   throw new Error("发布目录包含未加密的 spectral-data.json。");
 }
 
+if (!files.some((path) => path.endsWith("data\\spectra.sqlite") || path.endsWith("data/spectra.sqlite"))) {
+  throw new Error("发布目录缺少 SQLite 数据库 data/spectra.sqlite。");
+}
+if (!files.some((path) => path.endsWith("assets\\sql-wasm.js") || path.endsWith("assets/sql-wasm.js"))) {
+  throw new Error("发布目录缺少 SQLite 浏览器引擎 sql-wasm.js。");
+}
+if (!files.some((path) => path.endsWith("assets\\sql-wasm.wasm") || path.endsWith("assets/sql-wasm.wasm"))) {
+  throw new Error("发布目录缺少 SQLite WebAssembly 文件 sql-wasm.wasm。");
+}
+
+const SQL = await initSqlJs();
+const databaseBytes = await readFile(resolve(OUTPUT_ROOT, "data", "spectra.sqlite"));
+const db = new SQL.Database(databaseBytes);
+const sqliteCount = db.exec("select count(*) from spectra")[0]?.values?.[0]?.[0];
+if (sqliteCount < 38) {
+  throw new Error(`SQLite 数据库记录数异常：${sqliteCount}`);
+}
+const encryptedRecord = db.exec(
+  "select encrypted_record from spectra where technique = 'raman' limit 1",
+)[0]?.values?.[0]?.[0];
+db.close();
+if (!encryptedRecord || encryptedRecord === "{}") {
+  throw new Error("SQLite 数据库没有保存可解密的加密光谱记录。");
+}
+const sqlitePayload = JSON.parse(encryptedRecord);
+const sqliteSalt = Buffer.from(sqlitePayload.salt, "base64");
+const sqliteIv = Buffer.from(sqlitePayload.iv, "base64");
+const sqliteEncryptedWithTag = Buffer.from(sqlitePayload.ciphertext, "base64");
+const sqliteTag = sqliteEncryptedWithTag.subarray(sqliteEncryptedWithTag.length - 16);
+const sqliteCiphertext = sqliteEncryptedWithTag.subarray(0, sqliteEncryptedWithTag.length - 16);
+const sqliteKey = pbkdf2Sync(password, sqliteSalt, sqlitePayload.iterations, 32, "sha256");
+const sqliteDecipher = createDecipheriv("aes-256-gcm", sqliteKey, sqliteIv);
+sqliteDecipher.setAuthTag(sqliteTag);
+const sqliteDecrypted = Buffer.concat([
+  sqliteDecipher.update(sqliteCiphertext),
+  sqliteDecipher.final(),
+]);
+const sqliteRecord = JSON.parse(sqliteDecrypted.toString("utf8"));
+if (!Array.isArray(sqliteRecord.points) || sqliteRecord.points.length < 2) {
+  throw new Error("SQLite 加密记录解密后缺少可绘图 points。");
+}
+
 console.log(
   JSON.stringify({
     decryptedMatchesSource: true,
     plaintextDataAbsent: true,
     relativeAssetPaths: true,
+    sqliteDatabaseReady: true,
+    sqliteRecords: sqliteCount,
     encryptedPayloadBytes: encryptedWithTag.length,
     outputFiles: files.length,
   }),

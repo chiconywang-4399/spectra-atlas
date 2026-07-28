@@ -12,6 +12,7 @@
     "test:github-pages": "node scripts/verify-github-pages.mjs",
     "start": "vinext start",
     "generate:data": "node scripts/generate-spectral-data.mjs",
+    "database:init": "node scripts/create-spectral-sqlite.mjs",
     "test": "pnpm run build && node --test tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
@@ -20,7 +21,8 @@
     "drizzle-orm": "0.45.2",
     "next": "16.2.6",
     "react": "19.2.6",
-    "react-dom": "19.2.6"
+    "react-dom": "19.2.6",
+    "sql.js": "^1.14.1"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",

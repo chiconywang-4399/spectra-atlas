@@ -79,6 +79,48 @@ export type SpectralData = {
 };
 
 type Technique = "raman" | "uvvis" | "ftir" | "xps";
+type UploadTechnique = "raman" | "uvvis";
+
+type SpectralDatabaseRecord = {
+  id: string;
+  technique: Technique | "mixed";
+  label: string;
+  sourceFile: string;
+  uploadedAt: string;
+  pointCount: number;
+  xMin?: number;
+  xMax?: number;
+  yMin?: number;
+  yMax?: number;
+  sha256?: string;
+  tags?: string[];
+  encryptedRecord?: string;
+};
+
+type EncryptedPayload = {
+  version: number;
+  algorithm: "AES-GCM";
+  kdf: "PBKDF2-SHA256";
+  iterations: number;
+  salt: string;
+  iv: string;
+  ciphertext: string;
+};
+
+type UploadPreview = {
+  technique: UploadTechnique;
+  axis: { x: string; y: string };
+  series: SpectrumSeries;
+  rawText: string;
+  fileName: string;
+  sha256: string;
+};
+
+const GITHUB_OWNER = "chiconywang-4399";
+const GITHUB_REPO = "spectra-atlas";
+const GITHUB_BRANCH = "main";
+const DATABASE_PATH = "data/spectra.sqlite";
+const RECORD_ITERATIONS = 600_000;
 
 const techniqueInfo: Record<
   Technique,
@@ -144,6 +186,287 @@ const compact = (value: number) => {
 
 const fixed = (value: number, digits = 1) =>
   Number.isFinite(value) ? value.toFixed(digits) : "—";
+
+const uploadAxis = (technique: UploadTechnique) =>
+  technique === "raman"
+    ? { x: "Raman shift (cm⁻¹)", y: "Intensity (counts)" }
+    : { x: "Wavelength (nm)", y: "Signal (%)" };
+
+const bytesToBase64 = (bytes: Uint8Array) => {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.slice(index, index + chunkSize));
+  }
+  return btoa(binary);
+};
+
+const base64ToBytes = (value: string) =>
+  Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
+
+const sha256Hex = async (value: string) => {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+};
+
+const parseSpectrumText = (
+  rawText: string,
+  technique: UploadTechnique,
+  fileName: string,
+  label: string,
+  sha256: string,
+): UploadPreview => {
+  const points: Point[] = [];
+  for (const line of rawText.split(/\r?\n/)) {
+    const normalized = line.trim().replace(/,/g, " ");
+    if (!normalized || normalized.startsWith("#")) continue;
+    const matches = normalized.match(/[-+]?(?:\d+\.?\d*|\.\d+)(?:[Ee][-+]?\d+)?/g);
+    if (!matches || matches.length < 2) continue;
+    const x = Number(matches[0]);
+    const y = Number(matches[1]);
+    if (Number.isFinite(x) && Number.isFinite(y)) points.push([x, y]);
+  }
+
+  if (points.length < 2) {
+    throw new Error("没有解析到足够的两列数值数据。请使用 CSV/TXT，并确保每行至少包含 x 与 y。");
+  }
+
+  points.sort((a, b) => a[0] - b[0]);
+  const yValues = points.map((point) => point[1]);
+  const shouldPercentScale =
+    technique === "uvvis" &&
+    Math.min(...yValues) >= 0 &&
+    Math.max(...yValues) <= 1.5;
+  const plottedPoints = shouldPercentScale
+    ? points.map(([x, y]) => [x, y * 100] as Point)
+    : points;
+  const step = Math.max(Math.ceil(plottedPoints.length / 3500), 1);
+  const sampledPoints = plottedPoints.filter((_, index) => index % step === 0);
+  if (sampledPoints[sampledPoints.length - 1] !== plottedPoints[plottedPoints.length - 1]) {
+    sampledPoints.push(plottedPoints[plottedPoints.length - 1]);
+  }
+
+  const id = `${technique}-${Date.now().toString(36)}-${sha256.slice(0, 8)}`;
+  return {
+    technique,
+    axis: uploadAxis(technique),
+    rawText,
+    fileName,
+    sha256,
+    series: {
+      id,
+      label: label.trim() || fileName.replace(/\.[^.]+$/, ""),
+      color: technique === "raman" ? "#9ff2d7" : "#8ecbff",
+      points: sampledPoints,
+      pointCount: plottedPoints.length,
+      note: shouldPercentScale ? "UV–VIS 数据检测为 0–1 区间，已按百分比显示。" : undefined,
+      sourcePath: `GitHub database upload · ${fileName}`,
+    },
+  };
+};
+
+const encryptJson = async (password: string, value: unknown): Promise<EncryptedPayload> => {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const material = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(password),
+    "PBKDF2",
+    false,
+    ["deriveKey"],
+  );
+  const key = await crypto.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      hash: "SHA-256",
+      salt,
+      iterations: RECORD_ITERATIONS,
+    },
+    material,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt"],
+  );
+  const encrypted = new Uint8Array(
+    await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv },
+      key,
+      new TextEncoder().encode(JSON.stringify(value)),
+    ),
+  );
+  return {
+    version: 1,
+    algorithm: "AES-GCM",
+    kdf: "PBKDF2-SHA256",
+    iterations: RECORD_ITERATIONS,
+    salt: bytesToBase64(salt),
+    iv: bytesToBase64(iv),
+    ciphertext: bytesToBase64(encrypted),
+  };
+};
+
+const decryptJson = async <T,>(password: string, payload: EncryptedPayload): Promise<T> => {
+  const material = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(password),
+    "PBKDF2",
+    false,
+    ["deriveKey"],
+  );
+  const key = await crypto.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      hash: "SHA-256",
+      salt: base64ToBytes(payload.salt),
+      iterations: payload.iterations,
+    },
+    material,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["decrypt"],
+  );
+  const decrypted = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: base64ToBytes(payload.iv) },
+    key,
+    base64ToBytes(payload.ciphertext),
+  );
+  return JSON.parse(new TextDecoder().decode(decrypted)) as T;
+};
+
+const loadSqlJs = (() => {
+  let sqlPromise: Promise<any> | null = null;
+  return () => {
+    if (sqlPromise) return sqlPromise;
+    sqlPromise = new Promise((resolve, reject) => {
+      const existing = document.querySelector<HTMLScriptElement>(
+        'script[data-spectra-sqlite="true"]',
+      );
+      const start = () => {
+        if (!window.initSqlJs) {
+          reject(new Error("SQLite 引擎未加载。"));
+          return;
+        }
+        window
+          .initSqlJs({ locateFile: (file: string) => `./assets/${file}` })
+          .then(resolve)
+          .catch(reject);
+      };
+      if (window.initSqlJs) {
+        start();
+        return;
+      }
+      if (existing) {
+        existing.addEventListener("load", start, { once: true });
+        existing.addEventListener("error", () => reject(new Error("SQLite 脚本加载失败。")), {
+          once: true,
+        });
+        return;
+      }
+      const script = document.createElement("script");
+      script.src = "./assets/sql-wasm.js";
+      script.async = true;
+      script.dataset.spectraSqlite = "true";
+      script.addEventListener("load", start, { once: true });
+      script.addEventListener("error", () => reject(new Error("SQLite 脚本加载失败。")), {
+        once: true,
+      });
+      document.head.appendChild(script);
+    });
+    return sqlPromise;
+  };
+})();
+
+const createDatabaseSchema = (db: any) => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS spectra (
+      id TEXT PRIMARY KEY,
+      technique TEXT NOT NULL,
+      label TEXT NOT NULL,
+      source_file TEXT NOT NULL,
+      uploaded_at TEXT NOT NULL,
+      point_count INTEGER NOT NULL,
+      x_min REAL,
+      x_max REAL,
+      y_min REAL,
+      y_max REAL,
+      sha256 TEXT,
+      tags TEXT NOT NULL DEFAULT '[]',
+      encrypted_record TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_spectra_technique ON spectra (technique);
+    CREATE INDEX IF NOT EXISTS idx_spectra_uploaded_at ON spectra (uploaded_at);
+    CREATE INDEX IF NOT EXISTS idx_spectra_label ON spectra (label);
+    CREATE INDEX IF NOT EXISTS idx_spectra_source_file ON spectra (source_file);
+  `);
+};
+
+const rowsFromDatabase = (db: any): SpectralDatabaseRecord[] => {
+  createDatabaseSchema(db);
+  const result = db.exec(`
+    SELECT id, technique, label, source_file, uploaded_at, point_count,
+           x_min, x_max, y_min, y_max, sha256, tags, encrypted_record
+    FROM spectra
+    ORDER BY uploaded_at DESC
+  `)[0];
+  if (!result) return [];
+  return result.values.map((row: unknown[]) => ({
+    id: String(row[0]),
+    technique: String(row[1]) as SpectralDatabaseRecord["technique"],
+    label: String(row[2]),
+    sourceFile: String(row[3]),
+    uploadedAt: String(row[4]),
+    pointCount: Number(row[5]),
+    xMin: row[6] === null ? undefined : Number(row[6]),
+    xMax: row[7] === null ? undefined : Number(row[7]),
+    yMin: row[8] === null ? undefined : Number(row[8]),
+    yMax: row[9] === null ? undefined : Number(row[9]),
+    sha256: row[10] === null ? undefined : String(row[10]),
+    tags: row[11] ? JSON.parse(String(row[11])) : [],
+    encryptedRecord: String(row[12]),
+  }));
+};
+
+const openHostedDatabase = async () => {
+  const SQL = await loadSqlJs();
+  const response = await fetch(`./${DATABASE_PATH}`, { cache: "no-store" });
+  if (!response.ok) {
+    const db = new SQL.Database();
+    createDatabaseSchema(db);
+    return db;
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const db = new SQL.Database(bytes);
+  createDatabaseSchema(db);
+  return db;
+};
+
+const fetchGithubDatabase = async (token: string) => {
+  const response = await fetch(
+    `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${DATABASE_PATH}?ref=${GITHUB_BRANCH}`,
+    {
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    },
+  );
+  if (response.status === 404) return { sha: undefined, bytes: undefined };
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`GitHub API ${response.status}: ${message.slice(0, 240)}`);
+  }
+  const file = (await response.json()) as { sha: string; content: string };
+  return { sha: file.sha, bytes: base64ToBytes(file.content.replace(/\s/g, "")) };
+};
+
+declare global {
+  interface Window {
+    initSqlJs?: (config: { locateFile: (file: string) => string }) => Promise<any>;
+  }
+}
 
 function nearestPoint(points: Point[], targetX: number) {
   let closest = points[0];
@@ -410,10 +733,12 @@ export default function SpectralDashboard({
   data,
   currentUser,
   signOutPath,
+  accessPassword,
 }: {
   data: SpectralData;
   currentUser: { displayName: string; email: string };
   signOutPath: string;
+  accessPassword?: string;
 }) {
   const [technique, setTechnique] = useState<Technique>("raman");
   const [xpsRegion, setXpsRegion] = useState("mo3d");
@@ -423,12 +748,32 @@ export default function SpectralDashboard({
   const [rangeId, setRangeId] = useState("full");
   const [normalizeRaman, setNormalizeRaman] = useState(true);
   const [archiveQuery, setArchiveQuery] = useState("");
+  const [databaseQuery, setDatabaseQuery] = useState("");
+  const [databaseRecords, setDatabaseRecords] = useState<SpectralDatabaseRecord[]>([]);
+  const [databaseStatus, setDatabaseStatus] = useState("正在读取 GitHub SQLite 数据库…");
+  const [databaseSeries, setDatabaseSeries] = useState<{
+    technique: Technique;
+    axis: { x: string; y: string };
+    series: SpectrumSeries;
+  } | null>(null);
+  const [uploadTechnique, setUploadTechnique] = useState<UploadTechnique>("raman");
+  const [uploadLabel, setUploadLabel] = useState("");
+  const [uploadPreview, setUploadPreview] = useState<UploadPreview | null>(null);
+  const [uploadStatus, setUploadStatus] = useState("选择 Raman 或 UV–VIS 的 CSV/TXT 文件即可预览。");
+  const [githubToken, setGithubToken] = useState(() => {
+    if (typeof window === "undefined") return "";
+    return sessionStorage.getItem("spectra-github-token") ?? "";
+  });
 
   const activeXpsRegion =
     data.xps.regions.find((region) => region.id === xpsRegion) ?? data.xps.regions[0];
-  const activeSeries =
+  const baseActiveSeries =
     technique === "xps" ? activeXpsRegion.series : data[technique].series;
   const activeAxis = technique === "xps" ? data.xps.axis : data[technique].axis;
+  const activeSeries = useMemo(() => {
+    if (!databaseSeries || databaseSeries.technique !== technique) return baseActiveSeries;
+    return [...baseActiveSeries, databaseSeries.series];
+  }, [baseActiveSeries, databaseSeries, technique]);
   const activeRange = rangeOptions[technique].find((option) => option.id === rangeId)?.range;
   const inventoryByName = Object.fromEntries(data.inventory.map((item) => [item.name, item]));
 
@@ -441,7 +786,28 @@ export default function SpectralDashboard({
         : activeSeries.map((series) => series.id);
     setVisibleSeries(new Set(defaults));
     setRangeId("full");
-  }, [activeXpsRegion.id, technique]);
+  }, [activeSeries, activeXpsRegion.id, technique]);
+
+  useEffect(() => {
+    let cancelled = false;
+    openHostedDatabase()
+      .then((db) => {
+        if (cancelled) return;
+        const records = rowsFromDatabase(db);
+        db.close();
+        setDatabaseRecords(records);
+        setDatabaseStatus(`已载入 SQLite 数据库：${records.length} 条记录。`);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.warn(error);
+        setDatabaseRecords([]);
+        setDatabaseStatus("SQLite 数据库暂不可用；上传第一条数据时会自动建立。");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const selectTechnique = (next: Technique) => {
     setTechnique(next);
@@ -457,6 +823,191 @@ export default function SpectralDashboard({
     });
   };
 
+  const parseUpload = async (file: File) => {
+    setUploadStatus("正在解析文件…");
+    try {
+      const rawText = await file.text();
+      const digest = await sha256Hex(rawText);
+      const preview = parseSpectrumText(
+        rawText,
+        uploadTechnique,
+        file.name,
+        uploadLabel,
+        digest,
+      );
+      setUploadPreview(preview);
+      setDatabaseSeries({
+        technique: preview.technique,
+        axis: preview.axis,
+        series: preview.series,
+      });
+      setTechnique(preview.technique);
+      setUploadStatus(
+        `已解析 ${preview.series.pointCount?.toLocaleString("zh-CN")} 个点；可先查看曲线，确认后再写入 GitHub SQLite 数据库。`,
+      );
+    } catch (error) {
+      setUploadPreview(null);
+      setUploadStatus(error instanceof Error ? error.message : "文件解析失败。");
+    }
+  };
+
+  const commitUploadToGithub = async () => {
+    if (!uploadPreview) {
+      setUploadStatus("请先选择并解析一个 Raman 或 UV–VIS 文件。");
+      return;
+    }
+    if (!accessPassword) {
+      setUploadStatus("当前入口没有访问密码，无法加密写入；请从 GitHub Pages 密码页进入后再上传。");
+      return;
+    }
+    const token = githubToken.trim();
+    if (!token) {
+      setUploadStatus("请填写 GitHub fine-grained token，权限至少需要 Contents: Read and Write。");
+      return;
+    }
+
+    try {
+      sessionStorage.setItem("spectra-github-token", token);
+      setUploadStatus("正在加密并写入 SQLite 数据库…");
+
+      const SQL = await loadSqlJs();
+      const currentDatabase = await fetchGithubDatabase(token);
+      const db = currentDatabase.bytes
+        ? new SQL.Database(currentDatabase.bytes)
+        : new SQL.Database();
+      createDatabaseSchema(db);
+      const points = uploadPreview.series.points;
+      const xValues = points.map((point) => point[0]);
+      const yValues = points.map((point) => point[1]);
+      const id = uploadPreview.series.id;
+      const uploadedAt = new Date().toISOString();
+      const encryptedRecord = await encryptJson(accessPassword, {
+        schemaVersion: 1,
+        id,
+        technique: uploadPreview.technique,
+        label: uploadPreview.series.label,
+        axis: uploadPreview.axis,
+        points,
+        source: {
+          fileName: uploadPreview.fileName,
+          sha256: uploadPreview.sha256,
+          originalText: uploadPreview.rawText,
+        },
+        uploadedAt,
+      });
+
+      const nextRecord: SpectralDatabaseRecord = {
+        id,
+        technique: uploadPreview.technique,
+        label: uploadPreview.series.label,
+        sourceFile: uploadPreview.fileName,
+        uploadedAt,
+        pointCount: uploadPreview.series.pointCount ?? points.length,
+        xMin: Math.min(...xValues),
+        xMax: Math.max(...xValues),
+        yMin: Math.min(...yValues),
+        yMax: Math.max(...yValues),
+        sha256: uploadPreview.sha256,
+        tags: [uploadPreview.technique, "web-upload"],
+        encryptedRecord: JSON.stringify(encryptedRecord),
+      };
+
+      db.run("DELETE FROM spectra WHERE id = ?", [id]);
+      db.run(
+        `INSERT INTO spectra (
+          id, technique, label, source_file, uploaded_at, point_count,
+          x_min, x_max, y_min, y_max, sha256, tags, encrypted_record
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          nextRecord.id,
+          nextRecord.technique,
+          nextRecord.label,
+          nextRecord.sourceFile,
+          nextRecord.uploadedAt,
+          nextRecord.pointCount,
+          nextRecord.xMin,
+          nextRecord.xMax,
+          nextRecord.yMin,
+          nextRecord.yMax,
+          nextRecord.sha256,
+          JSON.stringify(nextRecord.tags ?? []),
+          nextRecord.encryptedRecord,
+        ],
+      );
+      db.run("PRAGMA user_version = 1");
+
+      const exportedDatabase = db.export();
+      const nextRows = rowsFromDatabase(db);
+      db.close();
+
+      const response = await fetch(
+        `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${DATABASE_PATH}`,
+        {
+          method: "PUT",
+          headers: {
+            Accept: "application/vnd.github+json",
+            Authorization: `Bearer ${token}`,
+            "X-GitHub-Api-Version": "2022-11-28",
+          },
+          body: JSON.stringify({
+            branch: GITHUB_BRANCH,
+            message: `Update SQLite spectral database for ${uploadPreview.series.label}`,
+            content: bytesToBase64(exportedDatabase),
+            sha: currentDatabase.sha,
+          }),
+        },
+      );
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(`GitHub API ${response.status}: ${message.slice(0, 240)}`);
+      }
+
+      setDatabaseRecords(nextRows);
+      setDatabaseStatus(`已写入 SQLite 数据库：${nextRecord.label}`);
+      setUploadStatus(`上传完成：${DATABASE_PATH}`);
+    } catch (error) {
+      setUploadStatus(error instanceof Error ? error.message : "写入 GitHub 失败。");
+    }
+  };
+
+  const loadDatabaseRecord = async (record: SpectralDatabaseRecord) => {
+    if (
+      !record.encryptedRecord ||
+      !["raman", "uvvis", "ftir", "xps"].includes(record.technique)
+    ) {
+      setDatabaseStatus("这条 SQLite 记录不是可直接绘图的光谱记录。");
+      return;
+    }
+    if (!accessPassword) {
+      setDatabaseStatus("当前入口没有访问密码，无法解密数据库记录。");
+      return;
+    }
+    try {
+      setDatabaseStatus(`正在解密 ${record.label}…`);
+      const stored = await decryptJson<{
+        id: string;
+        technique: Technique;
+        label: string;
+        axis: { x: string; y: string };
+        points: Point[];
+      }>(accessPassword, JSON.parse(record.encryptedRecord) as EncryptedPayload);
+      const series: SpectrumSeries = {
+        id: stored.id,
+        label: stored.label,
+        color: stored.technique === "raman" ? "#9ff2d7" : "#8ecbff",
+        points: stored.points,
+        pointCount: record.pointCount,
+        sourcePath: `SQLite database · ${DATABASE_PATH}`,
+      };
+      setDatabaseSeries({ technique: stored.technique, axis: stored.axis, series });
+      setTechnique(stored.technique);
+      setDatabaseStatus(`已载入并绘图：${stored.label}`);
+      document.getElementById("explorer")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (error) {
+      setDatabaseStatus(error instanceof Error ? error.message : "SQLite 记录读取失败。");
+    }
+  };
+
   const filteredInventory = data.inventory.filter((item) => {
     const query = archiveQuery.trim().toLowerCase();
     if (!query) return true;
@@ -464,6 +1015,20 @@ export default function SpectralDashboard({
       item.name.toLowerCase().includes(query) ||
       item.extensions.some((entry) => entry.extension.toLowerCase().includes(query))
     );
+  });
+  const filteredDatabaseRecords = databaseRecords.filter((record) => {
+    const query = databaseQuery.trim().toLowerCase();
+    if (!query) return true;
+    return [
+      record.label,
+      record.sourceFile,
+      record.technique,
+      DATABASE_PATH,
+      ...(record.tags ?? []),
+    ]
+      .join(" ")
+      .toLowerCase()
+      .includes(query);
   });
 
   const featuredRaman = data.raman.series.find((series) => series.peaks)!;
@@ -483,6 +1048,7 @@ export default function SpectralDashboard({
         <nav aria-label="主导航">
           <a href="#overview">总览</a>
           <a href="#explorer">光谱对比</a>
+          <a href="#github-database">GitHub 数据库</a>
           <a href="#xps-insights">拟合结果</a>
           <a href="#archive">数据档案</a>
         </nav>
@@ -730,10 +1296,143 @@ export default function SpectralDashboard({
         </div>
       </section>
 
+      <section className="database-section section-shell" id="github-database">
+        <div className="section-heading">
+          <div>
+            <p className="kicker">03 · GITHUB DATABASE</p>
+            <h2>上传、索引、回读同一套数据</h2>
+          </div>
+          <p>
+            Raman 与 UV–VIS 文件可在浏览器内解析并即时绘图；确认后写入
+            GitHub 仓库中的可检索 SQLite 数据库。
+          </p>
+        </div>
+
+        <div className="database-layout">
+          <article className="upload-panel">
+            <div className="database-card-head">
+              <span>UPLOAD</span>
+              <strong>Raman / UV–VIS</strong>
+            </div>
+            <div className="upload-grid">
+              <label>
+                <span>数据类型</span>
+                <select
+                  value={uploadTechnique}
+                  onChange={(event) => setUploadTechnique(event.target.value as UploadTechnique)}
+                >
+                  <option value="raman">Raman</option>
+                  <option value="uvvis">UV–VIS</option>
+                </select>
+              </label>
+              <label>
+                <span>样品 / 曲线名称</span>
+                <input
+                  value={uploadLabel}
+                  onChange={(event) => setUploadLabel(event.target.value)}
+                  placeholder="例如 MoS2-annealed-400s"
+                />
+              </label>
+              <label className="file-drop">
+                <span>选择 CSV / TXT / DAT</span>
+                <input
+                  type="file"
+                  accept=".csv,.txt,.dat,.tsv"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) void parseUpload(file);
+                  }}
+                />
+              </label>
+            </div>
+
+            {uploadPreview && (
+              <div className="upload-preview">
+                <div className="upload-preview-head">
+                  <span>{uploadPreview.technique.toUpperCase()}</span>
+                  <strong>{uploadPreview.series.label}</strong>
+                  <small>{uploadPreview.series.pointCount?.toLocaleString("zh-CN")} points</small>
+                </div>
+                <SpectrumChart
+                  series={[uploadPreview.series]}
+                  xLabel={uploadPreview.axis.x}
+                  yLabel={uploadPreview.axis.y}
+                  visible={new Set([uploadPreview.series.id])}
+                  normalize={uploadPreview.technique === "raman"}
+                />
+              </div>
+            )}
+
+            <div className="github-token-box">
+              <label>
+                <span>GitHub 写入令牌</span>
+                <input
+                  type="password"
+                  value={githubToken}
+                  onChange={(event) => setGithubToken(event.target.value)}
+                  placeholder="fine-grained token · Contents: Read and Write"
+                />
+              </label>
+              <button type="button" className="primary-action" onClick={commitUploadToGithub}>
+                加密写入 SQLite 数据库
+                <span aria-hidden="true">↗</span>
+              </button>
+            </div>
+            <p className="database-status">{uploadStatus}</p>
+            <p className="database-footnote">
+              说明：GitHub Pages 不能直接使用你浏览器里的 GitHub 登录态写仓库；写入时需要一次性
+              token。记录内容会用当前访问密码加密，索引只保存方便检索的元数据。
+            </p>
+          </article>
+
+          <article className="index-panel">
+            <div className="database-card-head">
+              <span>INDEX</span>
+              <strong>{databaseRecords.length} records</strong>
+            </div>
+            <label className="database-search">
+              <span aria-hidden="true">⌕</span>
+              <input
+                value={databaseQuery}
+                onChange={(event) => setDatabaseQuery(event.target.value)}
+                placeholder="搜索样品、文件名、Raman、UV–VIS 或标签"
+              />
+            </label>
+            <p className="database-status">{databaseStatus}</p>
+            <div className="database-records">
+              {filteredDatabaseRecords.map((record) => (
+                <div className="database-record" key={record.id}>
+                  <span>{record.technique.toUpperCase()}</span>
+                  <div>
+                    <strong>{record.label}</strong>
+                    <small>{record.sourceFile}</small>
+                    <small>
+                      {record.pointCount.toLocaleString("zh-CN")} points ·{" "}
+                      {record.uploadedAt.slice(0, 10)}
+                    </small>
+                    {record.xMin !== undefined && record.xMax !== undefined && (
+                      <small>
+                        X {fixed(record.xMin, 2)} → {fixed(record.xMax, 2)}
+                      </small>
+                    )}
+                  </div>
+                  <button type="button" onClick={() => void loadDatabaseRecord(record)}>
+                    载入绘图
+                  </button>
+                </div>
+              ))}
+              {filteredDatabaseRecords.length === 0 && (
+                <div className="database-empty">没有匹配的数据库记录。</div>
+              )}
+            </div>
+          </article>
+        </div>
+      </section>
+
       <section className="insights section-shell" id="xps-insights">
         <div className="section-heading">
           <div>
-            <p className="kicker">03 · SIGNALS & FITS</p>
+            <p className="kicker">04 · SIGNALS & FITS</p>
             <h2>关键读数，一眼定位</h2>
           </div>
           <p>将峰位、透射率与拟合质量从曲线中提取出来。</p>
@@ -876,7 +1575,7 @@ export default function SpectralDashboard({
         <div className="section-shell">
           <div className="section-heading light">
             <div>
-              <p className="kicker">04 · DATA ARCHIVE</p>
+              <p className="kicker">05 · DATA ARCHIVE</p>
               <h2>目录里实际有什么</h2>
             </div>
             <label className="archive-search">
