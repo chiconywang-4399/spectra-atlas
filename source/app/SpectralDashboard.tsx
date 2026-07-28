@@ -80,6 +80,8 @@ export type SpectralData = {
 
 type Technique = "raman" | "uvvis" | "ftir" | "xps";
 type UploadTechnique = "raman" | "uvvis";
+type PaletteId = "xps-fixed" | "okabe-ito" | "tol-vibrant" | "mono";
+type ChartExportPresetId = "paper-single" | "paper-double" | "slides-hd";
 
 type SpectralDatabaseRecord = {
   id: string;
@@ -175,6 +177,167 @@ const rangeOptions: Record<Technique, { id: string; label: string; range?: [numb
   xps: [{ id: "full", label: "当前谱区" }],
 };
 
+const plotAxisLabels: Record<Technique, { x: string; y: string }> = {
+  raman: { x: "Raman shift (cm^-1)", y: "Intensity (a.u.)" },
+  uvvis: { x: "Wavelength (nm)", y: "Transmittance (%)" },
+  ftir: { x: "Wavelength (um)", y: "Transmittance (%)" },
+  xps: { x: "Binding energy (eV)", y: "Intensity (a.u.)" },
+};
+
+const plotTitles: Record<Technique, string> = {
+  raman: "Raman spectra",
+  uvvis: "UV-VIS spectra",
+  ftir: "FTIR spectra",
+  xps: "XPS fitted spectra",
+};
+
+const plotRangeOptions: Record<Technique, { id: string; label: string; range?: [number, number] }[]> = {
+  raman: [
+    { id: "full", label: "Full spectrum" },
+    { id: "dg", label: "D / G bands", range: [1200, 1700] },
+    { id: "2d", label: "2D band", range: [2400, 2900] },
+  ],
+  uvvis: [
+    { id: "full", label: "Full range" },
+    { id: "vis", label: "Visible range", range: [400, 780] },
+    { id: "nir", label: "Near infrared", range: [780, 1690] },
+  ],
+  ftir: [
+    { id: "full", label: "Full spectrum" },
+    { id: "functional", label: "Functional groups · 2.5-6.7 um", range: [2.5, 6.7] },
+    { id: "fingerprint", label: "Fingerprint · 6.7-16.7 um", range: [6.7, 16.7] },
+  ],
+  xps: [{ id: "full", label: "Current region" }],
+};
+
+const paletteOptions: { id: PaletteId; label: string; colors: string[] }[] = [
+  {
+    id: "xps-fixed",
+    label: "XPS fixed / Okabe-Ito",
+    colors: ["#1f2937", "#D62728", "#0072B2", "#009E73", "#E69F00", "#CC79A7", "#56B4E9", "#D55E00"],
+  },
+  {
+    id: "okabe-ito",
+    label: "Okabe-Ito colorblind-safe",
+    colors: ["#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7"],
+  },
+  {
+    id: "tol-vibrant",
+    label: "Paul Tol vibrant",
+    colors: ["#0077BB", "#EE7733", "#33BBEE", "#EE3377", "#CC3311", "#009988", "#BBBBBB"],
+  },
+  {
+    id: "mono",
+    label: "Mono / grayscale",
+    colors: ["#111111", "#555555", "#888888", "#BBBBBB", "#D9D9D9"],
+  },
+];
+
+const paletteById = Object.fromEntries(paletteOptions.map((palette) => [palette.id, palette])) as Record<
+  PaletteId,
+  { id: PaletteId; label: string; colors: string[] }
+>;
+
+const exportPresets: Record<
+  ChartExportPresetId,
+  {
+    label: string;
+    widthMm?: number;
+    widthPx?: number;
+    dpi: number;
+    fontPt: number;
+    labelPt: number;
+    axisPt: number;
+    measuredPt: number;
+    fitPt: number;
+    componentPt: number;
+    gridPt: number;
+  }
+> = {
+  "paper-single": {
+    label: "Paper single column 89 mm",
+    widthMm: 89,
+    dpi: 1000,
+    fontPt: 6,
+    labelPt: 7,
+    axisPt: 0.6,
+    measuredPt: 0.75,
+    fitPt: 0.9,
+    componentPt: 0.7,
+    gridPt: 0.25,
+  },
+  "paper-double": {
+    label: "Paper double column 183 mm",
+    widthMm: 183,
+    dpi: 1000,
+    fontPt: 6.5,
+    labelPt: 7,
+    axisPt: 0.6,
+    measuredPt: 0.8,
+    fitPt: 0.95,
+    componentPt: 0.75,
+    gridPt: 0.25,
+  },
+  "slides-hd": {
+    label: "Presentation wide 1920 px",
+    widthPx: 1920,
+    dpi: 220,
+    fontPt: 13,
+    labelPt: 15,
+    axisPt: 1,
+    measuredPt: 1.5,
+    fitPt: 1.9,
+    componentPt: 1.5,
+    gridPt: 0.5,
+  },
+};
+
+function applyPalette(series: SpectrumSeries[], paletteId: PaletteId, technique: Technique | UploadTechnique) {
+  const withEnglishLabels = series.map((item) => ({
+    ...item,
+    label: englishSeriesLabel(item),
+  }));
+  if (paletteId === "xps-fixed" && technique === "xps") return withEnglishLabels;
+  const palette = paletteById[paletteId] ?? paletteById["okabe-ito"];
+  let componentIndex = 0;
+  return withEnglishLabels.map((item, index) => {
+    if (paletteId === "xps-fixed" && technique !== "xps") {
+      return { ...item, color: palette.colors[index % palette.colors.length] };
+    }
+    if (item.id === "background") return { ...item, color: paletteId === "mono" ? "#9A9A9A" : "#7A7A7A" };
+    if (item.id === "fit") return { ...item, color: paletteId === "mono" ? "#111111" : palette.colors[1] ?? "#D62728" };
+    if (item.id === "measured") return { ...item, color: palette.colors[0] };
+    const nextColor = palette.colors[(componentIndex + 2) % palette.colors.length];
+    componentIndex += 1;
+    return { ...item, color: nextColor };
+  });
+}
+
+function englishSeriesLabel(item: SpectrumSeries) {
+  const id = item.id.toLowerCase();
+  if (item.id === "measured") return "Measured";
+  if (item.id === "fit") return "Total fit";
+  if (item.id === "background") return "Shirley background";
+  if (id.includes("low_be_mo_0")) return "Low-BE Mo0/delta+";
+  if (id.includes("mo_3p_low_be")) return "Mo 3p low-BE";
+  if (id.includes("mo_3p_mo_4")) return "Mo 3p Mo4+";
+  if (id.includes("mo_3p_mo_6")) return "Mo 3p Mo6+";
+  if (id.includes("mo_4")) return "Mo4+";
+  if (id.includes("mo_6")) return "Mo6+";
+  if (id.includes("n_1s_i_counts")) return "N 1s-I";
+  if (id.includes("n_1s_ii_counts")) return "N 1s-II";
+  if (id.includes("lattice_o")) return "Lattice O2-";
+  if (id.includes("oh_defect_o")) return "OH / defect O";
+  if (id.includes("adsorbed_o")) return "Adsorbed O";
+  if (id.includes("sp_2_c_c")) return "sp2 C=C";
+  if (id.includes("sp_3_defect_c")) return "sp3 / defect C";
+  if (id.includes("c_o_o_c_o")) return "C=O / O-C-O";
+  if (id.includes("o_c_o")) return "O-C=O";
+  if (id.includes("c_o")) return "C-O";
+  if (id.includes("pi_pi_loss")) return "pi-pi* loss";
+  return item.label;
+}
+
 const compact = (value: number) => {
   const absolute = Math.abs(value);
   if (absolute >= 1000000) return `${(value / 1000000).toFixed(1)}M`;
@@ -189,8 +352,8 @@ const fixed = (value: number, digits = 1) =>
 
 const uploadAxis = (technique: UploadTechnique) =>
   technique === "raman"
-    ? { x: "Raman shift (cm⁻¹)", y: "Intensity (counts)" }
-    : { x: "Wavelength (nm)", y: "Signal (%)" };
+    ? plotAxisLabels.raman
+    : plotAxisLabels.uvvis;
 
 const bytesToBase64 = (bytes: Uint8Array) => {
   let binary = "";
@@ -481,14 +644,48 @@ function nearestPoint(points: Point[], targetX: number) {
   return closest;
 }
 
-const chartExportStyle = `
-  .plot-surface{fill:#ffffff;stroke:#d9ded8;stroke-width:1}
-  .grid-line{stroke:#e6e6df;stroke-width:1}
-  .tick-mark{stroke:#778083;stroke-width:1}
-  .axis-tick{fill:#344042;font-family:Arial,sans-serif;font-size:12px}
-  .axis-label{fill:#1f2937;font-family:Arial,sans-serif;font-size:14px;font-weight:700}
-  .hover-line{display:none}
-`;
+type PreparedSeries = SpectrumSeries & { chartPoints: Point[] };
+
+function exportGeometry(presetId: ChartExportPresetId) {
+  const preset = exportPresets[presetId] ?? exportPresets["paper-single"];
+  const viewWidth = 1000;
+  const viewHeight = 440;
+  const aspect = viewHeight / viewWidth;
+  const widthPx = preset.widthPx ?? Math.round(((preset.widthMm ?? 89) / 25.4) * preset.dpi);
+  const heightPx = Math.round(widthPx * aspect);
+  const widthValue = preset.widthMm ? `${preset.widthMm}mm` : `${widthPx}px`;
+  const heightValue = preset.widthMm ? `${((preset.widthMm ?? 89) * aspect).toFixed(2)}mm` : `${heightPx}px`;
+  const widthPt = preset.widthMm ? ((preset.widthMm ?? 89) / 25.4) * 72 : widthPx * (72 / 96);
+  const unitsPerPt = viewWidth / widthPt;
+  return {
+    preset,
+    viewWidth,
+    viewHeight,
+    widthPx,
+    heightPx,
+    widthValue,
+    heightValue,
+    fontUnits: preset.fontPt * unitsPerPt,
+    labelUnits: preset.labelPt * unitsPerPt,
+    axisUnits: preset.axisPt * unitsPerPt,
+    measuredUnits: preset.measuredPt * unitsPerPt,
+    fitUnits: preset.fitPt * unitsPerPt,
+    componentUnits: preset.componentPt * unitsPerPt,
+    gridUnits: preset.gridPt * unitsPerPt,
+  };
+}
+
+function chartExportStyle(presetId: ChartExportPresetId) {
+  const geometry = exportGeometry(presetId);
+  return `
+    .plot-surface{fill:#ffffff;stroke:#1f2937;stroke-width:${geometry.axisUnits.toFixed(3)}}
+    .grid-line{display:none}
+    .tick-mark{stroke:#1f2937;stroke-width:${geometry.axisUnits.toFixed(3)}}
+    .axis-tick{fill:#1f2937;font-family:Arial,Helvetica,sans-serif;font-size:${geometry.fontUnits.toFixed(3)}px}
+    .axis-label{fill:#1f2937;font-family:Arial,Helvetica,sans-serif;font-size:${geometry.labelUnits.toFixed(3)}px;font-weight:700}
+    .hover-line{display:none}
+  `;
+}
 
 function safeExportName(value: string) {
   return value
@@ -512,13 +709,29 @@ function downloadBlob(blob: Blob, fileName: string) {
   }, 30_000);
 }
 
-function serializeChartSvg(svg: SVGSVGElement, title: string) {
+function serializeChartSvg(svg: SVGSVGElement, title: string, presetId: ChartExportPresetId) {
+  const geometry = exportGeometry(presetId);
   const clone = svg.cloneNode(true) as SVGSVGElement;
   clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-  clone.setAttribute("width", "2000");
-  clone.setAttribute("height", "880");
+  clone.setAttribute("width", geometry.widthValue);
+  clone.setAttribute("height", geometry.heightValue);
+  clone.setAttribute("viewBox", `0 0 ${geometry.viewWidth} ${geometry.viewHeight}`);
+  clone.querySelectorAll<SVGPathElement>("path[data-export-line]").forEach((path) => {
+    const seriesId = path.dataset.seriesId;
+    const lineWidth =
+      seriesId === "measured"
+        ? geometry.measuredUnits
+        : seriesId === "fit"
+          ? geometry.fitUnits
+          : geometry.componentUnits;
+    path.removeAttribute("vector-effect");
+    path.setAttribute("stroke-width", lineWidth.toFixed(3));
+  });
+  clone.querySelectorAll<SVGElement>(".grid-line").forEach((line) => {
+    line.setAttribute("stroke-width", geometry.gridUnits.toFixed(3));
+  });
   const style = document.createElementNS("http://www.w3.org/2000/svg", "style");
-  style.textContent = chartExportStyle;
+  style.textContent = chartExportStyle(presetId);
   clone.prepend(style);
   const titleNode = document.createElementNS("http://www.w3.org/2000/svg", "title");
   titleNode.textContent = title;
@@ -526,12 +739,18 @@ function serializeChartSvg(svg: SVGSVGElement, title: string) {
   return `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(clone)}`;
 }
 
-function exportChartSvg(svg: SVGSVGElement, title: string, fileStem: string) {
-  downloadBlob(new Blob([serializeChartSvg(svg, title)], { type: "image/svg+xml;charset=utf-8" }), `${safeExportName(fileStem)}.svg`);
+function exportChartSvg(svg: SVGSVGElement, title: string, fileStem: string, presetId: ChartExportPresetId) {
+  downloadBlob(
+    new Blob([serializeChartSvg(svg, title, presetId)], { type: "image/svg+xml;charset=utf-8" }),
+    `${safeExportName(fileStem)}-${presetId}.svg`,
+  );
 }
 
-async function exportChartPng(svg: SVGSVGElement, title: string, fileStem: string) {
-  const url = URL.createObjectURL(new Blob([serializeChartSvg(svg, title)], { type: "image/svg+xml;charset=utf-8" }));
+async function exportChartPng(svg: SVGSVGElement, title: string, fileStem: string, presetId: ChartExportPresetId) {
+  const geometry = exportGeometry(presetId);
+  const url = URL.createObjectURL(
+    new Blob([serializeChartSvg(svg, title, presetId)], { type: "image/svg+xml;charset=utf-8" }),
+  );
   try {
     const image = new Image();
     const loaded = new Promise<void>((resolve, reject) => {
@@ -541,8 +760,8 @@ async function exportChartPng(svg: SVGSVGElement, title: string, fileStem: strin
     image.src = url;
     await loaded;
     const canvas = document.createElement("canvas");
-    canvas.width = 2000;
-    canvas.height = 880;
+    canvas.width = geometry.widthPx;
+    canvas.height = geometry.heightPx;
     const context = canvas.getContext("2d");
     if (!context) throw new Error("Canvas is unavailable.");
     context.fillStyle = "#ffffff";
@@ -551,10 +770,35 @@ async function exportChartPng(svg: SVGSVGElement, title: string, fileStem: strin
     const pngBlob = await new Promise<Blob>((resolve, reject) => {
       canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("PNG export failed.")), "image/png");
     });
-    downloadBlob(pngBlob, `${safeExportName(fileStem)}.png`);
+    downloadBlob(pngBlob, `${safeExportName(fileStem)}-${presetId}.png`);
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+function csvCell(value: string | number) {
+  const text = String(value);
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function exportPlotData(
+  prepared: PreparedSeries[],
+  xLabel: string,
+  yLabel: string,
+  fileStem: string,
+  format: "csv" | "txt",
+) {
+  const headers = ["series_id", "series_label", "x_label", "y_label", "x", "y"];
+  const rows = prepared.flatMap((item) =>
+    item.chartPoints.map(([x, y]) => [item.id, item.label, xLabel, yLabel, x, y] as (string | number)[]),
+  );
+  const separator = format === "csv" ? "," : "\t";
+  const encode = format === "csv" ? csvCell : (value: string | number) => String(value).replace(/\t/g, " ");
+  const content = [headers, ...rows].map((row) => row.map(encode).join(separator)).join("\n");
+  downloadBlob(
+    new Blob([`\uFEFF${content}`], { type: format === "csv" ? "text/csv;charset=utf-8" : "text/plain;charset=utf-8" }),
+    `${safeExportName(fileStem)}.${format}`,
+  );
 }
 
 function SpectrumChart({
@@ -569,6 +813,7 @@ function SpectrumChart({
   yMinFloor,
   exportTitle,
   exportFileName,
+  exportPresetId = "paper-single",
 }: {
   series: SpectrumSeries[];
   xLabel: string;
@@ -581,6 +826,7 @@ function SpectrumChart({
   yMinFloor?: number;
   exportTitle?: string;
   exportFileName?: string;
+  exportPresetId?: ChartExportPresetId;
 }) {
   const [hover, setHover] = useState<{
     viewX: number;
@@ -663,7 +909,7 @@ function SpectrumChart({
     (_, index) => chart.yMin + (index / 4) * (chart.yMax - chart.yMin),
   );
   const formatXTick = (value: number) => {
-    if (xLabel.includes("µm")) return value < 10 ? value.toFixed(2) : value.toFixed(1);
+    if (xLabel.includes("um")) return value < 10 ? value.toFixed(2) : value.toFixed(1);
     return compact(value);
   };
   const formatYTick = (value: number) => {
@@ -705,34 +951,76 @@ function SpectrumChart({
   return (
     <div className="chart-frame" ref={frameRef}>
       {prepared.length > 0 && (
-        <div className="chart-export-actions" aria-label="导出当前图像">
+        <div className="chart-export-actions" aria-label="Export current plot">
           <button
             type="button"
-            onClick={() => {
-              if (svgRef.current) exportChartSvg(svgRef.current, exportTitle ?? xLabel, exportFileName ?? exportTitle ?? "spectra-chart");
-            }}
+            onClick={() =>
+              exportPlotData(
+                prepared,
+                xLabel,
+                normalize ? "Normalized intensity (%)" : yLabel,
+                exportFileName ?? exportTitle ?? "spectra-chart",
+                "csv",
+              )
+            }
           >
-            导出 SVG
+            CSV
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              exportPlotData(
+                prepared,
+                xLabel,
+                normalize ? "Normalized intensity (%)" : yLabel,
+                exportFileName ?? exportTitle ?? "spectra-chart",
+                "txt",
+              )
+            }
+          >
+            TXT
           </button>
           <button
             type="button"
             onClick={() => {
-              if (svgRef.current) void exportChartPng(svgRef.current, exportTitle ?? xLabel, exportFileName ?? exportTitle ?? "spectra-chart");
+              if (svgRef.current) {
+                exportChartSvg(
+                  svgRef.current,
+                  exportTitle ?? xLabel,
+                  exportFileName ?? exportTitle ?? "spectra-chart",
+                  exportPresetId,
+                );
+              }
             }}
           >
-            导出 PNG
+            SVG
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (svgRef.current) {
+                void exportChartPng(
+                  svgRef.current,
+                  exportTitle ?? xLabel,
+                  exportFileName ?? exportTitle ?? "spectra-chart",
+                  exportPresetId,
+                );
+              }
+            }}
+          >
+            PNG
           </button>
         </div>
       )}
       {prepared.length === 0 ? (
-        <div className="chart-empty">选择至少一条曲线以继续比较</div>
+        <div className="chart-empty">Select at least one series to plot.</div>
       ) : (
         <svg
           ref={svgRef}
           className="spectrum-chart"
           viewBox={`0 0 ${width} ${height}`}
           role="img"
-          aria-label={`${xLabel} 与 ${normalize ? "Normalized intensity (%)" : yLabel} 光谱图`}
+          aria-label={`${xLabel} vs ${normalize ? "Normalized intensity (%)" : yLabel} spectral plot`}
           onPointerMove={handlePointerMove}
           onPointerLeave={() => setHover(null)}
         >
@@ -797,6 +1085,9 @@ function SpectrumChart({
           {prepared.map((item) => (
             <path
               key={item.id}
+              data-export-line="true"
+              data-series-id={item.id}
+              data-series-label={item.label}
               d={makePath(item.chartPoints)}
               fill="none"
               stroke={item.color}
@@ -822,7 +1113,7 @@ function SpectrumChart({
           className={`chart-tooltip ${hover.left > (frameRef.current?.clientWidth ?? 0) * 0.66 ? "tooltip-left" : ""}`}
           style={{ left: hover.left, top: Math.max(hover.top, 66) }}
         >
-          <div className="tooltip-x">{xLabel}: {xLabel.includes("µm") ? fixed(hover.dataX, 2) : fixed(hover.dataX, 1)}</div>
+          <div className="tooltip-x">{xLabel}: {xLabel.includes("um") ? fixed(hover.dataX, 2) : fixed(hover.dataX, 1)}</div>
           {hover.entries.slice(0, 7).map((entry) => (
             <div className="tooltip-row" key={entry.label}>
               <span className="tooltip-dot" style={{ background: entry.color }} />
@@ -854,6 +1145,8 @@ export default function SpectralDashboard({
   );
   const [rangeId, setRangeId] = useState("full");
   const [normalizeRaman, setNormalizeRaman] = useState(true);
+  const [paletteId, setPaletteId] = useState<PaletteId>("xps-fixed");
+  const [exportPresetId, setExportPresetId] = useState<ChartExportPresetId>("paper-single");
   const [archiveQuery, setArchiveQuery] = useState("");
   const [databaseQuery, setDatabaseQuery] = useState("");
   const [databaseRecords, setDatabaseRecords] = useState<SpectralDatabaseRecord[]>([]);
@@ -876,24 +1169,28 @@ export default function SpectralDashboard({
     data.xps.regions.find((region) => region.id === xpsRegion) ?? data.xps.regions[0];
   const baseActiveSeries =
     technique === "xps" ? activeXpsRegion.series : data[technique].series;
-  const activeAxis = technique === "xps" ? data.xps.axis : data[technique].axis;
-  const activeSeries = useMemo(() => {
+  const activeAxis = plotAxisLabels[technique];
+  const rawActiveSeries = useMemo(() => {
     if (!databaseSeries || databaseSeries.technique !== technique) return baseActiveSeries;
     return [...baseActiveSeries, databaseSeries.series];
   }, [baseActiveSeries, databaseSeries, technique]);
-  const activeRange = rangeOptions[technique].find((option) => option.id === rangeId)?.range;
+  const activeSeries = useMemo(
+    () => applyPalette(rawActiveSeries, paletteId, technique),
+    [paletteId, rawActiveSeries, technique],
+  );
+  const activeRange = plotRangeOptions[technique].find((option) => option.id === rangeId)?.range;
   const inventoryByName = Object.fromEntries(data.inventory.map((item) => [item.name, item]));
 
   useEffect(() => {
     const defaults =
       technique === "xps"
-        ? activeSeries
+        ? rawActiveSeries
             .filter((series) => series.id !== "background")
             .map((series) => series.id)
-        : activeSeries.map((series) => series.id);
+        : rawActiveSeries.map((series) => series.id);
     setVisibleSeries(new Set(defaults));
     setRangeId("full");
-  }, [activeSeries, activeXpsRegion.id, technique]);
+  }, [rawActiveSeries, activeXpsRegion.id, technique]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1318,15 +1615,38 @@ export default function SpectralDashboard({
                       onChange={(event) => setNormalizeRaman(event.target.checked)}
                     />
                     <span />
-                    归一化
+                    Normalize
                   </label>
                 )}
                 <label className="select-control">
-                  <span>观察窗口</span>
+                  <span>Range</span>
                   <select value={rangeId} onChange={(event) => setRangeId(event.target.value)}>
-                    {rangeOptions[technique].map((option) => (
+                    {plotRangeOptions[technique].map((option) => (
                       <option value={option.id} key={option.id}>
                         {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="select-control">
+                  <span>Palette</span>
+                  <select value={paletteId} onChange={(event) => setPaletteId(event.target.value as PaletteId)}>
+                    {paletteOptions.map((option) => (
+                      <option value={option.id} key={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="select-control">
+                  <span>Export</span>
+                  <select
+                    value={exportPresetId}
+                    onChange={(event) => setExportPresetId(event.target.value as ChartExportPresetId)}
+                  >
+                    {Object.entries(exportPresets).map(([id, preset]) => (
+                      <option value={id} key={id}>
+                        {preset.label}
                       </option>
                     ))}
                   </select>
@@ -1355,7 +1675,7 @@ export default function SpectralDashboard({
                 <h3>
                   {technique === "xps"
                     ? `${data.xps.sample} · ${activeXpsRegion.label}`
-                    : `${techniqueInfo[technique].name} 样品对比`}
+                    : plotTitles[technique]}
                 </h3>
               </div>
               <span className="chart-badge">
@@ -1377,16 +1697,17 @@ export default function SpectralDashboard({
               exportTitle={
                 technique === "xps"
                   ? `${data.xps.sample} · ${activeXpsRegion.label}`
-                  : `${techniqueInfo[technique].name} spectra`
+                  : plotTitles[technique]
               }
               exportFileName={
                 technique === "xps"
                   ? `xps-${data.xps.sample}-${activeXpsRegion.id}`
                   : `${technique}-${rangeId}`
               }
+              exportPresetId={exportPresetId}
             />
 
-            <div className="series-legend" aria-label="曲线图例">
+            <div className="series-legend" aria-label="Series legend">
               {activeSeries.map((series) => (
                 <button
                   type="button"
@@ -1403,12 +1724,12 @@ export default function SpectralDashboard({
             <div className="chart-note">
               <span>ⓘ</span>
               {technique === "uvvis"
-                ? data.uvvis.note
+                ? "UV-VIS curves are displayed as transmittance versus wavelength. Use the CSV/TXT export to download the visible plotted data."
                 : technique === "xps"
-                  ? `能量校准：${data.xps.chargeReference.line} → ${data.xps.chargeReference.target_binding_energy_eV.toFixed(1)} eV；应用位移 ${data.xps.chargeReference.applied_shift_eV.toFixed(3)} eV。`
+                  ? `Energy calibration: ${data.xps.chargeReference.line} -> ${data.xps.chargeReference.target_binding_energy_eV.toFixed(1)} eV; applied shift ${data.xps.chargeReference.applied_shift_eV.toFixed(3)} eV.`
                   : technique === "ftir"
-                    ? "FTIR 原始数据为波数 cm⁻¹；页面按 λ(µm)=10000/波数 转换为波长坐标，并以 0–100% 透过率范围显示。"
-                    : "曲线由目录内原始文件解析并抽样显示；抽样保留峰形，定量分析仍以源文件为准。"}
+                    ? "FTIR source data are converted from wavenumber to wavelength using wavelength (um) = 10000 / wavenumber (cm^-1), and displayed on a 0-100% transmittance axis."
+                    : "Curves are sampled from the source files for interactive display; use the source data or the plotted CSV/TXT export for quantitative follow-up."}
             </div>
           </div>
         </div>
@@ -1472,13 +1793,14 @@ export default function SpectralDashboard({
                   <small>{uploadPreview.series.pointCount?.toLocaleString("zh-CN")} points</small>
                 </div>
                 <SpectrumChart
-                  series={[uploadPreview.series]}
+                  series={applyPalette([uploadPreview.series], paletteId, uploadPreview.technique)}
                   xLabel={uploadPreview.axis.x}
                   yLabel={uploadPreview.axis.y}
                   visible={new Set([uploadPreview.series.id])}
                   normalize={uploadPreview.technique === "raman"}
                   exportTitle={uploadPreview.series.label}
                   exportFileName={`upload-${uploadPreview.technique}-${uploadPreview.series.label}`}
+                  exportPresetId={exportPresetId}
                 />
               </div>
             )}

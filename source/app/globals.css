@@ -1127,7 +1127,8 @@ a {
 .workbench-actions {
   display: flex;
   align-items: center;
-  gap: 22px;
+  flex-wrap: wrap;
+  gap: 12px 18px;
   padding: 0 20px;
 }
 
@@ -1180,6 +1181,7 @@ a {
   gap: 10px;
   color: #718082;
   font-size: 9px;
+  white-space: nowrap;
 }
 
 .select-control select {
@@ -1256,6 +1258,8 @@ a {
   right: 10px;
   z-index: 5;
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 6px;
 }
 
