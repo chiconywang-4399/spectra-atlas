@@ -42,6 +42,19 @@ if (digest(decrypted) !== digest(source)) {
 }
 
 const sourceData = JSON.parse(source.toString("utf8"));
+for (const region of sourceData.xps.regions ?? []) {
+  const background = region.series?.find((series) => series.id === "background");
+  if (!background) continue;
+  const backgroundMin = Math.min(...background.points.map((point) => point[1]));
+  for (const component of region.series.filter((series) => series.component)) {
+    const componentMin = Math.min(...component.points.map((point) => point[1]));
+    if (componentMin < backgroundMin * 0.5) {
+      throw new Error(
+        `XPS component ${region.label}/${component.label} appears to be plotted near zero instead of on the Shirley background.`,
+      );
+    }
+  }
+}
 const sensitiveNeedles = [
   sourceData.raman.series[0]?.label,
   sourceData.raman.series[0]?.id,

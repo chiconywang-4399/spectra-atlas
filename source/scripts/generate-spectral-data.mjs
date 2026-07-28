@@ -3,7 +3,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const dataRoot = path.resolve(projectRoot, "..");
+const dataRoot = process.env.SPECTRA_DATA_ROOT
+  ? path.resolve(process.env.SPECTRA_DATA_ROOT)
+  : path.resolve(projectRoot, "..");
 
 const measurementFolders = ["Raman", "UV-VIS", "FT-IR", "XPS", "EUV-BEUV-T"];
 
@@ -340,8 +342,12 @@ for (const [id, label, filename] of xpsRegionFiles) {
         .replace("OH defect O", "OH / 缺陷 O")
         .replace("adsorbed O", "吸附 O"),
       color: ["#4dabf7", "#63e6be", "#ffd43b", "#c77dff", "#ffb86b", "#74c0fc"][index % 6],
-      points: rows.map((row) => [toNumber(row.binding_energy_eV), toNumber(row[header])]),
+      points: rows.map((row) => [
+        toNumber(row.binding_energy_eV),
+        toNumber(row.shirley_background_counts_per_s) + toNumber(row[header]),
+      ]),
       component: true,
+      note: "Component intensity is rendered on top of the Shirley background for raw-count XPS fitting plots.",
     })),
   ];
   xpsRegions.push({

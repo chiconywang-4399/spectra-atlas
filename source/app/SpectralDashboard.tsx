@@ -490,6 +490,7 @@ function SpectrumChart({
   reverseX,
   normalize,
   yDomain,
+  yMinFloor,
 }: {
   series: SpectrumSeries[];
   xLabel: string;
@@ -499,6 +500,7 @@ function SpectrumChart({
   reverseX?: boolean;
   normalize?: boolean;
   yDomain?: [number, number];
+  yMinFloor?: number;
 }) {
   const [hover, setHover] = useState<{
     viewX: number;
@@ -546,13 +548,16 @@ function SpectrumChart({
     const yPadding = Math.max((yMax - yMin) * 0.08, Math.abs(yMax) * 0.015, 0.01);
     yMin -= yPadding;
     yMax += yPadding;
+    if (typeof yMinFloor === "number") {
+      yMin = Math.max(yMinFloor, yMin);
+    }
     return {
       xMin: Math.min(...xValues),
       xMax: Math.max(...xValues),
       yMin,
       yMax,
     };
-  }, [prepared, yDomain]);
+  }, [prepared, yDomain, yMinFloor]);
 
   const width = 1000;
   const height = 440;
@@ -1266,6 +1271,7 @@ export default function SpectralDashboard({
               reverseX={technique === "xps"}
               normalize={technique === "raman" && normalizeRaman}
               yDomain={technique === "ftir" ? [0, 100] : undefined}
+              yMinFloor={technique === "xps" ? 0 : undefined}
             />
 
             <div className="series-legend" aria-label="曲线图例">
