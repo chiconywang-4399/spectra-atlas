@@ -123,6 +123,20 @@ test("plot legends and exported series labels are normalized to English", async 
   assert.ok(source.includes('.replace(/(\\d+)\\s*次均值/g, "$1-run mean")'));
 });
 
+test("CSV and TXT exports use Origin-friendly wide XY columns", async () => {
+  const source = await readFile(new URL("../app/SpectralDashboard.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /function originWideRows/);
+  assert.match(source, /const designations = prepared\.flatMap\(\(\) => \["X", "Y"\]\)/);
+  assert.match(source, /axisParts\(xLabel\)/);
+  assert.match(source, /axisParts\(yLabel\)/);
+  assert.match(source, />\s*Origin CSV\s*<\/button>/);
+  assert.match(source, />\s*Origin TXT\s*<\/button>/);
+  assert.match(source, /units\?: string\[\]/);
+  assert.match(source, /comments\?: string\[\]/);
+  assert.doesNotMatch(source, /const headers = \["series_id"/);
+});
+
 test("XPS export includes deconvolution, background-corrected, residual, and fit metadata", async () => {
   const payload = JSON.parse(
     await readFile(new URL("../app/spectral-data.json", import.meta.url), "utf8"),

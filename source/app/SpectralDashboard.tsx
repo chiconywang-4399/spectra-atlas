@@ -408,6 +408,8 @@ function xpsExportSections(
     {
       title: "xps_export_inventory",
       headers: ["data_product", "description"],
+      units: ["", ""],
+      comments: ["Exported table name", "Meaning of the exported data product"],
       rows: [
         ["measured", "Original measured XPS intensity at each binding-energy point."],
         ["total_fit", "Total fitted envelope at each binding-energy point."],
@@ -421,16 +423,22 @@ function xpsExportSections(
     {
       title: "xps_fit_parameters",
       headers: ["region", "component", "binding_energy_eV", "fwhm_eV", "area_percent"],
+      units: ["", "", "eV", "eV", "%"],
+      comments: ["XPS region", "Fitted chemical-state/component label", "Peak binding energy", "Full width at half maximum", "Peak area fraction"],
       rows: fitRows,
     },
     {
       title: "xps_fit_quality",
       headers: ["region", "r_squared", "aicc"],
+      units: ["", "", ""],
+      comments: ["XPS region", "Coefficient of determination", "Akaike information criterion with correction"],
       rows: qualityRows,
     },
     {
       title: "xps_charge_reference",
       headers: ["reference_line", "target_binding_energy_eV", "applied_shift_eV"],
+      units: ["", "eV", "eV"],
+      comments: ["Charge correction reference", "Reference binding energy", "Applied binding-energy shift"],
       rows: [[
         data.chargeReference.line,
         data.chargeReference.target_binding_energy_eV,
@@ -750,6 +758,8 @@ type PreparedSeries = SpectrumSeries & { chartPoints: Point[] };
 type ExportSection = {
   title: string;
   headers: string[];
+  units?: string[];
+  comments?: string[];
   rows: (string | number)[][];
 };
 
@@ -892,6 +902,35 @@ function csvCell(value: string | number) {
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
+function axisParts(label: string) {
+  const match = label.match(/^(.*?)\s*\((.*?)\)\s*$/);
+  if (!match) return { name: label, unit: "" };
+  return { name: match[1].trim(), unit: match[2].trim() };
+}
+
+function originWideRows(prepared: PreparedSeries[], xLabel: string, yLabel: string) {
+  const x = axisParts(xLabel);
+  const y = axisParts(yLabel);
+  const longNames = prepared.flatMap((item) => [
+    `${item.label} ${x.name}`,
+    `${item.label} ${y.name}`,
+  ]);
+  const units = prepared.flatMap(() => [x.unit, y.unit]);
+  const designations = prepared.flatMap(() => ["X", "Y"]);
+  const comments = prepared.flatMap((item) => [
+    `X values for ${item.label}; series_id=${item.id}`,
+    `Y values for ${item.label}; series_id=${item.id}`,
+  ]);
+  const maxRows = Math.max(...prepared.map((item) => item.chartPoints.length), 0);
+  const dataRows = Array.from({ length: maxRows }, (_, rowIndex) =>
+    prepared.flatMap((item) => {
+      const point = item.chartPoints[rowIndex];
+      return point ? [point[0], point[1]] : ["", ""];
+    }),
+  );
+  return [longNames, units, designations, comments, ...dataRows];
+}
+
 function exportPlotData(
   prepared: PreparedSeries[],
   xLabel: string,
@@ -900,20 +939,16 @@ function exportPlotData(
   format: "csv" | "txt",
   sections: ExportSection[] = [],
 ) {
-  const headers = ["series_id", "series_label", "x_label", "y_label", "x", "y"];
-  const rows = prepared.flatMap((item) =>
-    item.chartPoints.map(([x, y]) => [item.id, item.label, xLabel, yLabel, x, y] as (string | number)[]),
-  );
   const separator = format === "csv" ? "," : "\t";
   const encode = format === "csv" ? csvCell : (value: string | number) => String(value).replace(/\t/g, " ");
   const blocks = [
-    ["plot_series_data"],
-    headers,
-    ...rows,
+    ...originWideRows(prepared, xLabel, yLabel),
     ...sections.flatMap((section) => [
       [],
-      [section.title],
+      [`# ${section.title}`],
       section.headers,
+      ...(section.units ? [section.units] : []),
+      ...(section.comments ? [section.comments] : []),
       ...section.rows,
     ]),
   ];
@@ -1100,7 +1135,7 @@ function SpectrumChart({
               )
             }
           >
-            CSV
+            Origin CSV
           </button>
           <button
             type="button"
@@ -1115,7 +1150,7 @@ function SpectrumChart({
               )
             }
           >
-            TXT
+            Origin TXT
           </button>
           <button
             type="button"
